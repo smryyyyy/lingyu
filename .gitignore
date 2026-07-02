@@ -1,0 +1,24 @@
+# Rust
+target/
+Cargo.lock
+
+# macOS
+.DS_Store
+*.swp
+*.swo
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+
+# Temp
+*.part
+*.log
