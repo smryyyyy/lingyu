@@ -2,15 +2,14 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Rust-1.85+-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust">
-  <img src="https://img.shields.io/badge/GTK4-4.14-7F5AB6?style=flat-square&logo=gtk&logoColor=white" alt="GTK4">
+  <img src="https://img.shields.io/badge/GTK4-4.22-7F5AB6?style=flat-square&logo=gtk&logoColor=white" alt="GTK4">
   <img src="https://img.shields.io/badge/SenseVoice-FF6F00?style=flat-square&logo=huggingface&logoColor=white" alt="SenseVoice">
-  <img src="https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS">
   <img src="https://img.shields.io/badge/Windows-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT License">
 </p>
 
 <p align="center">
-  暗色浮窗语音转文字 — 左键录音，右键切引擎，识别结果自动复制到剪贴板。
+  Windows 暗色浮窗语音转文字 — 按住录音，松手自动识别并复制到剪贴板。
 </p>
 
 ---
@@ -28,71 +27,68 @@
 
 ## 功能特点
 
-- **暗色浮窗**：可选置顶的浮窗，SVG 麦克风图标，空闲时白色，录音时切换为红色方块
-- **左键录音**：点击录音/停止 → 异步识别 → 自动复制到剪贴板，全程不打断工作流
-- **右键菜单**：切换本地模型 / 自定义 API / 置顶切换 / 快捷键设置 / 历史记录 / 退出
+- **暗色浮窗**：可选置顶的浮窗，SVG 麦克风图标
+- **按住录音（Push-to-Talk）**：按住鼠标左键或 F6 录音，松手自动识别
+- **全局热键**：F6 全局生效，切到其他窗口也能按住录音
 - **本地模式**：调 `llama-funasr-sensevoice` 子进程 + SenseVoice GGUF 模型，离线识别
-- **API 模式**：自定义 OpenAI 兼容端点（URL + Key + 模型名），支持任意 Whisper 兼容服务
 - **双模型支持**：SenseVoice Q8（~242MB，速度快）和 F16（~470MB，精度高），首次选择自动下载
 - **VAD 检测**：集成 fsmn-vad 模型，自动过滤静音段
-- **快捷键**：F1-F12 可选，DB 持久化，实时生效
+- **快捷键设置**：F1-F12 可选，DB 持久化
 - **历史记录**：SQLite 存储 50 条最近识别记录
-- **跨平台**：macOS ARM64 / Windows x64
-- **调试日志**：所有错误写入 `~/lingyu-debug.log`，UI 保持简洁
+- **窗口置顶**：Win32 SetWindowPos 实现
+- **调试日志**：所有错误写入 `C:\Users\<user>\lingyu-debug.log`
 
 ## 快速开始
 
 ### 前置条件
 
-- Rust 工具链（`rustup` 安装）
-- macOS: `brew install gtk4 pkgconf cmake`
-- Windows: 安装 [MSYS2](https://www.msys2.org/) → 打开 UCRT64 终端 → `pacman -S mingw-w64-ucrt-x86_64-gtk4 mingw-w64-ucrt-x86_64-pkgconf`
+- 安装 [MSYS2](https://www.msys2.org/)
+- 打开 **UCRT64 终端**（不是 MSYS2、不是 MINGW64、不是 PowerShell）
+- 安装依赖：
+
+```bash
+pacman -S mingw-w64-ucrt-x86_64-gtk4 mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-rust
+```
 
 ### 从源码构建
 
 ```bash
 git clone https://github.com/your/lingyu.git
 cd lingyu
-
-# macOS 需设置 PKG_CONFIG_PATH
-export PKG_CONFIG_PATH="/opt/homebrew/opt/glib/lib/pkgconfig:/opt/homebrew/opt/gtk4/lib/pkgconfig:$PKG_CONFIG_PATH"
-
-# 构建
 cargo build --release
-
-# 运行
-cargo run --release
 ```
 
-> **Windows 用户**：`build.rs` 会自动将 MSYS2 UCRT64 的 GTK4 DLL 复制到 `target/release/`，构建完成后 `.exe` 开箱即用，无需手动设置 PATH。
+> `build.rs` 会自动将 MSYS2 UCRT64 的 GTK4 DLL 复制到 `target/release/`，构建完成后 `.exe` 开箱即用。
 
 ### 首次启动
 
-首次启动会自动下载 FunASR 引擎（`llama-funasr-sensevoice`）和 VAD 模型到 `~/Library/Application Support/lingyu/`。选择本地引擎后会自动下载对应的 SenseVoice GGUF 模型。
+```bash
+./target/release/lingyu.exe --debug
+```
+
+首次启动会自动下载 FunASR 引擎（`llama-funasr-sensevoice.exe`）和 VAD 模型到 `%LOCALAPPDATA%\lingyu\`。选择本地引擎后会自动下载对应的 SenseVoice GGUF 模型。
 
 ## 使用说明
 
 | 操作 | 说明 |
 |------|------|
-| 左键点击图标 | 开始录音 / 停止录音（会自动识别并复制结果） |
-| 右键点击图标 | 弹出菜单：切换引擎、设置快捷键、查看历史 |
-| F6（可自定义） | 全局快捷键，同左键功能 |
-| 设置 → 快捷键 | 打开对话框选择 F1-F12 |
+| 按住左键 | 开始录音，松开自动识别并复制结果 |
+| 右键菜单 | 切换本地模型（Q8/F16）、设置快捷键、窗口置顶、历史记录 |
+| 全局 F6 | 同左键功能，切到其他窗口也生效 |
 
-### 录音 + 识别
+### 录音流程
 
-1. 左键麦克风或按快捷键 → 开始录音（图标变红）
-2. 再点左键或快捷键 → 停止录音，自动识别
+1. **按住**鼠标左键或 F6 → 按钮变绿 + 图标切换 → 开始录音
+2. **松手** → 自动停止录音并识别
 3. 识别结果自动复制到剪贴板，状态栏显示"已复制"
 
-### 切换引擎
+### 切换模型
 
-右键 → 菜单分为两个区：
+右键 → 语音转文字 → 选择 Q8（快速）或 F16（高精度），选中项前会有 ✔ 标记。
 
-- **本地 SenseVoice**：Q8（快速低内存） / F16（高精度）
-- **自定义 API**：输入任意 OpenAI 兼容的 STT 端点
+### 快捷键
 
-选中项前会有 ✔ 标记，退出后自动保留选择。
+右键 → 设置快捷键 → 选择 F1-F12 → 确定。全局热键随设置变更（下次启动生效）。
 
 ## 项目结构
 
@@ -100,7 +96,7 @@ cargo run --release
 .
 ├── src/
 │   ├── main.rs         # 入口，应用初始化
-│   ├── ui.rs           # 核心 UI：浮窗、按钮、菜单、快捷键、下载
+│   ├── ui.rs           # 核心 UI：浮窗、按钮、菜单、全局热键、下载
 │   ├── config.rs       # 配置加载、模型预设、FunASR/VAD 信息
 │   ├── audio.rs        # cpal 录音 + hound WAV 编码
 │   ├── local_stt.rs    # FunASR 子进程调用 + 输出解析
@@ -111,10 +107,9 @@ cargo run --release
 │   └── tests/
 │       └── mod.rs      # 测试模块
 ├── icons/
-│   ├── microphone.svg             # 白色麦克风
-│   └── microphone_recording.svg   # 红色方块
-├── build.rs             # Windows 自动打包 GTK4 DLL
-├── justfile             # 一键安装依赖 + 构建
+│   ├── microphone.svg             # 白色麦克风（空闲）
+│   └── microphone_recording.svg   # 红色方块（录音中）
+├── build.rs             # Windows 自动打包 GTK4 DLL + gdk-pixbuf 加载器
 ├── Cargo.toml           # 依赖清单
 └── README.md
 ```
@@ -131,9 +126,8 @@ cargo run --release
 | rusqlite | SQLite 历史 + 设置持久化 |
 | arboard | 系统剪贴板 |
 | gdk-pixbuf | SVG 图标渲染 |
-| flate2 + tar + zip | FunASR 二进制解压 |
-| objc (macOS) | 原生窗口置顶 API |
-| SetWindowPos (Windows) | Win32 窗口置顶 |
+| GetAsyncKeyState | Windows 全局热键轮询 |
+| SetWindowPos | Win32 窗口置顶 |
 
 ## 许可证
 

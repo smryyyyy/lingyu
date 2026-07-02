@@ -10,10 +10,6 @@ mod local_stt;
 mod tests;
 mod ui;
 
-#[cfg(target_os = "macos")]
-#[macro_use]
-extern crate objc;
-
 use gtk4::prelude::*;
 use std::sync::Arc;
 

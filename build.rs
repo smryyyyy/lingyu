@@ -77,5 +77,51 @@ fn main() {
         if copied > 0 {
             println!("cargo:warning=LingYu: bundled {copied} GTK4 DLLs to target/{profile}");
         }
+
+        // ── Copy gdk-pixbuf format loaders (SVG, etc.) ──
+        let ucrt64_root = bin_dir.parent().unwrap(); // e.g. C:\msys64\ucrt64
+        let loaders_src = ucrt64_root
+            .join("lib\\gdk-pixbuf-2.0\\2.10.0\\loaders");
+        let loaders_dst = target_dir.join("lib\\gdk-pixbuf-2.0\\2.10.0\\loaders");
+        let query_loaders = ucrt64_root.join("bin\\gdk-pixbuf-query-loaders.exe");
+
+        if loaders_src.exists() && query_loaders.exists() {
+            std::fs::create_dir_all(&loaders_dst).ok();
+            let mut loader_copied = 0u32;
+            if let Ok(entries) = std::fs::read_dir(&loaders_src) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) == Some("dll") {
+                        let name = entry.file_name();
+                        let dst = loaders_dst.join(&name);
+                        if !dst.exists() && std::fs::copy(&path, &dst).is_ok() {
+                            loader_copied += 1;
+                        }
+                    }
+                }
+            }
+            if loader_copied > 0 {
+                println!("cargo:warning=LingYu: bundled {loader_copied} gdk-pixbuf loaders to target/{profile}");
+
+                // Generate loaders.cache using MSYS2's gdk-pixbuf-query-loaders
+                let cache_path = target_dir.join("lib\\gdk-pixbuf-2.0\\2.10.0\\loaders.cache");
+                if !cache_path.exists() {
+                    if let Ok(output) = std::process::Command::new(&query_loaders).output() {
+                        if output.status.success() {
+                            let cache_content = String::from_utf8_lossy(&output.stdout);
+                            if let Err(e) = std::fs::write(&cache_path, cache_content.as_bytes()) {
+                                println!("cargo:warning=LingYu: failed to write loaders.cache: {e}");
+                            } else {
+                                println!("cargo:warning=LingYu: generated loaders.cache");
+                            }
+                        } else {
+                            println!("cargo:warning=LingYu: gdk-pixbuf-query-loaders failed");
+                        }
+                    } else {
+                        println!("cargo:warning=LingYu: could not run gdk-pixbuf-query-loaders");
+                    }
+                }
+            }
+        }
     }
 }

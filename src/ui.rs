@@ -17,13 +17,6 @@ const CSS: &str = r#"
     window.main-window {
         background-color: transparent;
     }
-    window.main-window.macos-bg {
-        background-color: rgba(17, 17, 17, 0.92);
-    }
-    .macos-bg .mic-btn {
-        min-width: 68px;
-        min-height: 68px;
-    }
     .mic-btn {
         min-width: 72px;
         min-height: 72px;
@@ -63,23 +56,10 @@ const CSS: &str = r#"
         background-color: #d97706;
         box-shadow: none;
     }
-    .mic-btn.done,
-    .mic-btn.done:hover {
-        background-image: none;
-        background-color: #16a34a;
-        box-shadow: none;
-    }
     @keyframes pulse {
         0%   { opacity: 1.0; }
         50%  { opacity: 0.7; }
         100% { opacity: 1.0; }
-    }
-    .brand-label {
-        color: rgba(255, 255, 255, 0.4);
-        font-size: 9px;
-        font-weight: 500;
-        letter-spacing: 1px;
-        margin-top: 4px;
     }
     .status-label {
         color: #e2e8f0;
@@ -164,7 +144,7 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
         let d = db.lock().unwrap();
         d.as_ref()
             .and_then(|d| d.get_setting("transcription_mode").ok().flatten())
-            .unwrap_or_else(|| "custom".to_string())
+            .unwrap_or_else(|| config::LOCAL_MODEL_PRESETS.first().map(|m| m.id).unwrap_or("sensevoice-q8").to_string())
     };
     let initial_api_url = {
         let d = db.lock().unwrap();
@@ -222,15 +202,12 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
         .css_classes(vec!["main-window"])
         .build();
 
-    #[cfg(target_os = "macos")]
-    window.add_css_class("macos-bg");
-
     // ── Layout ──
     let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
     vbox.set_halign(gtk4::Align::Center);
     vbox.set_valign(gtk4::Align::Center);
 
-    // ── Mic icon ──
+    // ── Button (SVG mic icon) ──
     let mic_pixbuf = load_mic_pixbuf(MIC_SVG);
     let mic_rec_pixbuf = load_mic_pixbuf(MIC_REC_SVG);
     let icon = gtk4::Image::from_pixbuf(Some(&mic_pixbuf));
@@ -248,159 +225,155 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     status.set_opacity(0.0);
 
     vbox.append(&button);
-
-    // macOS: brand label + overlay
-    #[cfg(target_os = "macos")]
-    {
-        icon.set_pixel_size(36);
-        button.set_size_request(68, 68);
-        let brand = gtk4::Label::new(Some("灵语"));
-        brand.set_justify(gtk4::Justification::Center);
-        brand.add_css_class("brand-label");
-        vbox.append(&brand);
-        window.set_default_size(96, 110);
-    }
-
-    // Status: overlay on macOS, normal on others
-    #[cfg(not(target_os = "macos"))]
     vbox.append(&status);
 
     let handle = gtk4::WindowHandle::new();
-
-    #[cfg(target_os = "macos")]
-    {
-        let overlay = gtk4::Overlay::new();
-        overlay.set_child(Some(&vbox));
-        status.set_halign(gtk4::Align::Center);
-        status.set_valign(gtk4::Align::End);
-        status.set_margin_bottom(4);
-        overlay.add_overlay(&status);
-        handle.set_child(Some(&overlay));
-    }
-
-    #[cfg(not(target_os = "macos"))]
     handle.set_child(Some(&vbox));
 
     window.set_child(Some(&handle));
 
-    // ── Left-click handler ──
-    let state_l = Rc::clone(&state);
-    let recorder_l = Rc::clone(&recorder);
-    let runtime_l = Rc::clone(&runtime);
-    let icon_l = icon.clone();
-    let mic_pixbuf = mic_pixbuf.clone();
-    let mic_rec_pixbuf = mic_rec_pixbuf.clone();
-    let db_l = Arc::clone(&db);
-    let status_l = status.clone();
+    // ── Left-click handler (push-to-talk) ──
+    let gesture_left = gtk4::GestureClick::new();
+    gesture_left.set_button(1);
+    gesture_left.set_exclusive(true);
 
-    button.connect_clicked(move |_| {
-        let current = *state_l.borrow();
-        match current {
-            State::Idle | State::Processing => {
-                if let Err(e) = recorder_l.borrow_mut().start() {
-                    log_error(&format!("录音失败：{e}"));
-                    show_status(&status_l, "错误，看日志");
+    // Shared recording start helper
+    let rec_start = {
+        let state_s = Rc::clone(&state);
+        let recorder_s = Rc::clone(&recorder);
+        let button_s = button.clone();
+        let icon_s = icon.clone();
+        let mic_rec_pixbuf_s = mic_rec_pixbuf.clone();
+        let status_s = status.clone();
+        move || -> bool {
+            if *state_s.borrow() != State::Idle { return false; }
+            if let Err(e) = recorder_s.borrow_mut().start() {
+                log_error(&format!("录音失败：{e}"));
+                show_status(&status_s, "错误，看日志");
+                return false;
+            }
+            *state_s.borrow_mut() = State::Recording;
+            icon_s.set_from_pixbuf(Some(&mic_rec_pixbuf_s));
+            button_s.add_css_class("recording");
+            show_status(&status_s, "录音中...");
+            true
+        }
+    };
+
+    // Shared recording stop + transcribe helper
+    let rec_stop = {
+        let state_s = Rc::clone(&state);
+        let recorder_s = Rc::clone(&recorder);
+        let icon_s = icon.clone();
+        let mic_pixbuf_s = mic_pixbuf.clone();
+        let button_s = button.clone();
+        let status_s = status.clone();
+        let runtime_s = Rc::clone(&runtime);
+        let db_s = Arc::clone(&db);
+        move || {
+            if *state_s.borrow() != State::Recording { return; }
+            let wav_data = match recorder_s.borrow_mut().stop() {
+                Ok(d) => d,
+                Err(e) => {
+                    *state_s.borrow_mut() = State::Idle;
+                    icon_s.set_from_pixbuf(Some(&mic_pixbuf_s));
+                    button_s.remove_css_class("recording");
+                    hide_status(&status_s);
+                    show_status(&status_s, &format!("{e}"));
                     return;
                 }
-                *state_l.borrow_mut() = State::Recording;
-                icon_l.set_from_pixbuf(Some(&mic_rec_pixbuf));
-                show_status(&status_l, "录音中...");
-            }
-            State::Recording => {
-                let wav_data = match recorder_l.borrow_mut().stop() {
-                    Ok(d) => d,
-                    Err(e) => {
-                        *state_l.borrow_mut() = State::Idle;
-                        icon_l.set_from_pixbuf(Some(&mic_pixbuf));
-                        hide_status(&status_l);
-                        show_status(&status_l, &format!("{e}"));
-                        return;
-                    }
+            };
+            *state_s.borrow_mut() = State::Processing;
+            icon_s.set_from_pixbuf(Some(&mic_pixbuf_s));
+            button_s.remove_css_class("recording");
+            show_status(&status_s, "识别中...");
+
+            let state_p = Rc::clone(&state_s);
+            let button_p = button_s.clone();
+            let runtime_p = Rc::clone(&runtime_s);
+            let db_p = Arc::clone(&db_s);
+            let status_p = status_s.clone();
+            let sample_rate = recorder_s.borrow().sample_rate();
+
+            let (mode_is_api, api_key_s, api_url_s, api_model_s, local_whisper_s) = {
+                let rt = runtime_p.borrow();
+                let is_api = matches!(rt.active_service, TranscriptionService::Api);
+                let key = rt.api_key.clone().unwrap_or_default();
+                let url = rt.api_base_url.clone();
+                let mdl = rt.api_model.clone();
+                let local = rt.local_whisper.clone();
+                (is_api, key, url, mdl, local)
+            };
+
+            let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+            std::thread::spawn(move || {
+                let result = if mode_is_api {
+                    crate::api::transcribe_blocking(&api_url_s, &api_key_s, &api_model_s, wav_data)
+                } else if let Some(l) = local_whisper_s {
+                    l.transcribe(&wav_data, sample_rate)
+                } else {
+                    Err("本地引擎未就绪".into())
                 };
-                *state_l.borrow_mut() = State::Processing;
-                icon_l.set_from_pixbuf(Some(&mic_pixbuf));
-                show_status(&status_l, "识别中...");
+                let _ = tx.send(result);
+            });
 
-                let state_p = Rc::clone(&state_l);
-                let icon_p = icon_l.clone();
-                let mic_pixbuf = mic_pixbuf.clone();
-                let runtime_p = Rc::clone(&runtime_l);
-                let db_p = Arc::clone(&db_l);
-                let status_p = status_l.clone();
-                let sample_rate = recorder_l.borrow().sample_rate();
-
-                // Extract data BEFORE spawning thread (Rc<RefCell> is !Send)
-                let (mode_is_api, api_key_s, api_url_s, api_model_s, local_whisper_s) = {
-                    let rt = runtime_p.borrow();
-                    let is_api = matches!(rt.active_service, TranscriptionService::Api);
-                    let key = rt.api_key.clone().unwrap_or_default();
-                    let url = rt.api_base_url.clone();
-                    let mdl = rt.api_model.clone();
-                    let local = rt.local_whisper.clone();
-                    (is_api, key, url, mdl, local)
-                };
-
-                // Spawn background thread (no tokio needed)
-                let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
-                std::thread::spawn(move || {
-                    let result = if mode_is_api {
-                        crate::api::transcribe_blocking(&api_url_s, &api_key_s, &api_model_s, wav_data)
-                    } else if let Some(l) = local_whisper_s {
-                        l.transcribe(&wav_data, sample_rate)
-                    } else {
-                        Err("本地引擎未就绪".into())
-                    };
-                    let _ = tx.send(result);
-                });
-
-                // Poll channel to get result and update UI
-                glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
-                    match rx.try_recv() {
-                        Ok(Ok(text)) => {
-                            if let Err(e) = input::copy_to_clipboard(&text) {
-                                log_error(&format!("复制到剪贴板失败：{e}"));
-                                show_status(&status_p, "错误，看日志");
-                            } else {
-                                show_status(&status_p, "已复制");
-                                if let Ok(d) = db_p.lock() {
-                                    if let Some(ref d) = *d {
-                                        let _ = d.insert(&text);
-                                    }
+            glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+                match rx.try_recv() {
+                    Ok(Ok(text)) => {
+                        if let Err(e) = input::copy_to_clipboard(&text) {
+                            log_error(&format!("复制到剪贴板失败：{e}"));
+                            show_status(&status_p, "错误，看日志");
+                        } else {
+                            show_status(&status_p, "已复制");
+                            if let Ok(d) = db_p.lock() {
+                                if let Some(ref d) = *d {
+                                    let _ = d.insert(&text);
                                 }
                             }
-                            let st = status_p.clone();
-                            glib::timeout_add_local_once(
-                                std::time::Duration::from_secs(2),
-                                move || hide_status(&st),
-                            );
                         }
-                        Ok(Err(e)) => {
-                            log_error(&format!("识别失败：{e}"));
-                            show_status(&status_p, "错误，看日志");
-                            let st = status_p.clone();
-                            glib::timeout_add_local_once(
-                                std::time::Duration::from_secs(4),
-                                move || hide_status(&st),
-                            );
-                        }
-                        Err(std::sync::mpsc::TryRecvError::Empty) => {
-                            return glib::ControlFlow::Continue;
-                        }
-                        Err(_) => {}
+                        let st = status_p.clone();
+                        glib::timeout_add_local_once(
+                            std::time::Duration::from_secs(2),
+                            move || hide_status(&st),
+                        );
                     }
-                    if *state_p.borrow() == State::Processing {
-                        *state_p.borrow_mut() = State::Idle;
-                        icon_p.set_from_pixbuf(Some(&mic_pixbuf));
+                    Ok(Err(e)) => {
+                        log_error(&format!("识别失败：{e}"));
+                        show_status(&status_p, "错误，看日志");
+                        let st = status_p.clone();
+                        glib::timeout_add_local_once(
+                            std::time::Duration::from_secs(4),
+                            move || hide_status(&st),
+                        );
                     }
-                    glib::ControlFlow::Break
-                });
-            }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        return glib::ControlFlow::Continue;
+                    }
+                    Err(_) => {}
+                }
+                if *state_p.borrow() == State::Processing {
+                    *state_p.borrow_mut() = State::Idle;
+                    button_p.remove_css_class("recording");
+                }
+                glib::ControlFlow::Break
+            });
         }
+    };
+
+    let rec_start_g = rec_start.clone();
+    let rec_stop_g = rec_stop.clone();
+    gesture_left.connect_pressed(move |g, _n_press, _x, _y| {
+        g.set_state(gtk4::EventSequenceState::Claimed);
+        rec_start_g();
     });
+    gesture_left.connect_released(move |g, _n_press, _x, _y| {
+        g.set_state(gtk4::EventSequenceState::Claimed);
+        rec_stop_g();
+    });
+    button.add_controller(gesture_left);
 
     // ── Right-click menu ──
     let stt_section = gtk4::gio::Menu::new();
-    stt_section.append(Some("自定义 API"), Some("app.transcription-mode::custom"));
 
     let stt_local_section = gtk4::gio::Menu::new();
     for lm in config::LOCAL_MODEL_PRESETS {
@@ -596,10 +569,6 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                 });
             }
             return;
-        } else if id == "custom" {
-            drop(db_guard);
-            show_custom_api_dialog(&window_m, &runtime_m, &db_m, action, &status_m, &config_m);
-            return; // dialog handles its own status
         }
 
         let st = status_m.clone();
@@ -613,8 +582,8 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     aat_action.connect_activate(move |action, _| {
         let new_state = !action.state().and_then(|s| s.get::<bool>()).unwrap_or(true);
         action.change_state(&new_state.to_variant());
-        if new_state { macos_set_window_floating(&win_aat); }
-        else { macos_unset_window_floating(&win_aat); }
+        if new_state { set_win32_topmost(&win_aat, true); }
+        else { set_win32_topmost(&win_aat, false); }
     });
     app.add_action(&aat_action);
 
@@ -682,12 +651,7 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     open_model_action.connect_activate(move |_, _| {
         let path_str = models_dir_open.to_string_lossy().to_string();
         std::fs::create_dir_all(&*models_dir_open).ok();
-        #[cfg(target_os = "macos")]
-        let _ = std::process::Command::new("open").arg(&path_str).spawn();
-        #[cfg(target_os = "windows")]
         let _ = std::process::Command::new("explorer").arg(&path_str).spawn();
-        #[cfg(target_os = "linux")]
-        let _ = std::process::Command::new("xdg-open").arg(&path_str).spawn();
     });
     app.add_action(&open_model_action);
 
@@ -724,17 +688,50 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     let sc_key = db.lock().ok()
         .and_then(|d| d.as_ref().and_then(|d| d.get_setting("record_shortcut").ok().flatten()))
         .unwrap_or_else(|| "F6".to_string());
-    // Register record action with shortcut
-    let record_action = gtk4::gio::SimpleAction::new("record", None);
-    let btn_rec = button.clone();
-    let state_rec = Rc::clone(&state);
-    record_action.connect_activate(move |_, _| {
-        if *state_rec.borrow() == State::Idle {
-            btn_rec.emit_clicked();
+
+    // ── Global hotkey polling (GetAsyncKeyState) ──
+    {
+        let vk_code: i32 = match sc_key.as_str() {
+            "F1" => 0x70, "F2" => 0x71, "F3" => 0x72, "F4" => 0x73,
+            "F5" => 0x74, "F6" => 0x75, "F7" => 0x76, "F8" => 0x77,
+            "F9" => 0x78, "F10" => 0x79, "F11" => 0x7A, "F12" => 0x7B,
+            _ => 0x75,
+        };
+        extern "system" {
+            fn GetAsyncKeyState(vKey: i32) -> i16;
         }
-    });
-    app.add_action(&record_action);
-    app.set_accels_for_action("app.record", &[&sc_key]);
+        let was_down = Rc::new(std::cell::RefCell::new(false));
+        let was_down_hk = Rc::clone(&was_down);
+        let state_hk = Rc::clone(&state);
+        let recorder_hk = Rc::clone(&recorder);
+        let button_hk = button.clone();
+        let status_hk = status.clone();
+        let runtime_hk = Rc::clone(&runtime);
+        let db_hk = Arc::clone(&db);
+        glib::timeout_add_local(std::time::Duration::from_millis(80), move || {
+            let now_down = unsafe { GetAsyncKeyState(vk_code) as u16 & 0x8000 != 0 };
+            let prev_down = *was_down_hk.borrow();
+            *was_down_hk.borrow_mut() = now_down;
+
+            // Push-to-talk: key down → start, key up → stop
+            if now_down && !prev_down && *state_hk.borrow() == State::Idle {
+                if let Err(e) = recorder_hk.borrow_mut().start() {
+                    log_error(&format!("全局热键录音失败：{e}"));
+                    show_status(&status_hk, "错误，看日志");
+                    return glib::ControlFlow::Continue;
+                }
+                *state_hk.borrow_mut() = State::Recording;
+                button_hk.add_css_class("recording");
+                show_status(&status_hk, "录音中...");
+            } else if !now_down && prev_down && *state_hk.borrow() == State::Recording {
+                stop_and_transcribe(
+                    &state_hk, &recorder_hk, &button_hk,
+                    &status_hk, &db_hk, &runtime_hk,
+                );
+            }
+            glib::ControlFlow::Continue
+        });
+    }
 
     // ── Window position + present ──
     position_window(&window, &db);
@@ -774,7 +771,99 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     });
 
     // Default: always-on-top
-    macos_set_window_floating(&window);
+    set_win32_topmost(&window, true);
+}
+
+// ── Shared stop + transcribe helper ─────────────────────────────────────────
+
+/// Stop the recorder, transcribe in a background thread, and update UI.
+/// Used by both the global hotkey timer and the gesture handlers.
+fn stop_and_transcribe(
+    state: &Rc<std::cell::RefCell<State>>,
+    recorder: &Rc<std::cell::RefCell<Recorder>>,
+    button: &gtk4::Button,
+    status: &gtk4::Label,
+    db: &Arc<Mutex<Option<Db>>>,
+    runtime: &Rc<std::cell::RefCell<RuntimeState>>,
+) {
+    if *state.borrow() != State::Recording { return; }
+    let wav_data = match recorder.borrow_mut().stop() {
+        Ok(d) => d,
+        Err(e) => {
+            *state.borrow_mut() = State::Idle;
+            button.remove_css_class("recording");
+            hide_status(status);
+            show_status(status, &format!("{e}"));
+            return;
+        }
+    };
+    *state.borrow_mut() = State::Processing;
+    button.remove_css_class("recording");
+    show_status(status, "识别中...");
+
+    let state_p = Rc::clone(state);
+    let button_p = button.clone();
+    let runtime_p = Rc::clone(runtime);
+    let db_p = Arc::clone(db);
+    let status_p = status.clone();
+    let sample_rate = recorder.borrow().sample_rate();
+
+    let (mode_is_api, api_key_s, api_url_s, api_model_s, local_whisper_s) = {
+        let rt = runtime_p.borrow();
+        let is_api = matches!(rt.active_service, TranscriptionService::Api);
+        let key = rt.api_key.clone().unwrap_or_default();
+        let url = rt.api_base_url.clone();
+        let mdl = rt.api_model.clone();
+        let local = rt.local_whisper.clone();
+        (is_api, key, url, mdl, local)
+    };
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    std::thread::spawn(move || {
+        let result = if mode_is_api {
+            crate::api::transcribe_blocking(&api_url_s, &api_key_s, &api_model_s, wav_data)
+        } else if let Some(l) = local_whisper_s {
+            l.transcribe(&wav_data, sample_rate)
+        } else {
+            Err("本地引擎未就绪".into())
+        };
+        let _ = tx.send(result);
+    });
+
+    glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+        match rx.try_recv() {
+            Ok(Ok(text)) => {
+                if let Err(e) = input::copy_to_clipboard(&text) {
+                    log_error(&format!("复制到剪贴板失败：{e}"));
+                    show_status(&status_p, "错误，看日志");
+                } else {
+                    show_status(&status_p, "已复制");
+                    if let Ok(d) = db_p.lock() {
+                        if let Some(ref d) = *d {
+                            let _ = d.insert(&text);
+                        }
+                    }
+                }
+                let st = status_p.clone();
+                glib::timeout_add_local_once(
+                    std::time::Duration::from_secs(2), move || hide_status(&st));
+            }
+            Ok(Err(e)) => {
+                log_error(&format!("识别失败：{e}"));
+                show_status(&status_p, "错误，看日志");
+                let st = status_p.clone();
+                glib::timeout_add_local_once(
+                    std::time::Duration::from_secs(4), move || hide_status(&st));
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+            Err(_) => {}
+        }
+        if *state_p.borrow() == State::Processing {
+            *state_p.borrow_mut() = State::Idle;
+            button_p.remove_css_class("recording");
+        }
+        glib::ControlFlow::Break
+    });
 }
 
 // ── Error logging helper ──────────────────────────────────────────────────────
@@ -826,158 +915,6 @@ fn show_history_dialog(window: &gtk4::ApplicationWindow, db: &Arc<Mutex<Option<D
     scrolled.set_child(Some(&text_view));
     dialog.content_area().append(&scrolled);
     dialog.show();
-}
-
-// ── Custom API dialog ─────────────────────────────────────────────────────────
-
-fn show_custom_api_dialog(
-    parent: &gtk4::ApplicationWindow,
-    runtime: &Rc<RefCell<RuntimeState>>,
-    db: &Arc<Mutex<Option<Db>>>,
-    action: &gtk4::gio::SimpleAction,
-    status: &gtk4::Label,
-    config: &Arc<Config>,
-) {
-    let previous_provider = runtime.borrow().active_provider.clone();
-
-    let dialog = gtk4::Window::builder()
-        .title("自定义 API 配置")
-        .default_width(400)
-        .default_height(220)
-        .transient_for(parent)
-        .modal(true)
-        .build();
-
-    let grid = gtk4::Grid::builder()
-        .row_spacing(8)
-        .column_spacing(12)
-        .margin_top(16)
-        .margin_bottom(16)
-        .margin_start(16)
-        .margin_end(16)
-        .build();
-
-    // Base URL
-    let url_label = gtk4::Label::new(Some("基础 URL"));
-    url_label.set_halign(gtk4::Align::End);
-    let url_entry = gtk4::Entry::new();
-    url_entry.set_hexpand(true);
-    url_entry.set_placeholder_text(Some("https://api.example.com/v1"));
-    grid.attach(&url_label, 0, 0, 1, 1);
-    grid.attach(&url_entry, 1, 0, 2, 1);
-
-    // API Key
-    let key_label = gtk4::Label::new(Some("API 密钥"));
-    key_label.set_halign(gtk4::Align::End);
-    let key_entry = gtk4::Entry::new();
-    key_entry.set_hexpand(true);
-    key_entry.set_placeholder_text(Some("（可选）"));
-    key_entry.set_input_purpose(gtk4::InputPurpose::Password);
-    key_entry.set_visibility(false);
-    grid.attach(&key_label, 0, 1, 1, 1);
-    grid.attach(&key_entry, 1, 1, 2, 1);
-
-    // Model
-    let model_label = gtk4::Label::new(Some("模型"));
-    model_label.set_halign(gtk4::Align::End);
-    let model_entry = gtk4::Entry::new();
-    model_entry.set_hexpand(true);
-    model_entry.set_placeholder_text(Some("whisper-1"));
-    grid.attach(&model_label, 0, 2, 1, 1);
-    grid.attach(&model_entry, 1, 2, 2, 1);
-
-    // Pre-populate from DB
-    if let Ok(d) = db.lock() {
-        if let Some(ref d) = *d {
-            if let Ok(Some(url)) = d.get_setting("api_custom_url") {
-                url_entry.set_text(&url);
-            }
-            if let Ok(Some(key)) = d.get_setting("api_custom_key") {
-                key_entry.set_text(&key);
-            }
-            if let Ok(Some(model)) = d.get_setting("api_custom_model") {
-                model_entry.set_text(&model);
-            }
-        }
-    }
-
-    // Buttons
-    let btn_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
-    btn_box.set_halign(gtk4::Align::End);
-    let cancel_btn = gtk4::Button::with_label("取消");
-    let save_btn = gtk4::Button::with_label("保存");
-    btn_box.append(&cancel_btn);
-    btn_box.append(&save_btn);
-    grid.attach(&btn_box, 0, 3, 3, 1);
-
-    dialog.set_child(Some(&grid));
-
-    // Cancel → revert radio to previous provider
-    let action_cancel = action.clone();
-    let prev = previous_provider.clone();
-    let dialog_cancel = dialog.clone();
-    cancel_btn.connect_clicked(move |_| {
-        action_cancel.set_state(&prev.to_variant());
-        dialog_cancel.close();
-    });
-
-    // Save → persist + switch
-    let runtime_save = Rc::clone(runtime);
-    let db_save = Arc::clone(db);
-    let config_save = Arc::clone(config);
-    let action_save = action.clone();
-    let status_save = status.clone();
-    let dialog_save = dialog.clone();
-    save_btn.connect_clicked(move |_| {
-        let url = url_entry.text().to_string();
-        let key_text = key_entry.text().to_string();
-        let model = model_entry.text().to_string();
-
-        if url.is_empty() || model.is_empty() {
-            return;
-        }
-
-        let api_key = if key_text.is_empty() {
-            None
-        } else {
-            Some(key_text.clone())
-        };
-
-        // Persist to DB
-        if let Ok(d) = db_save.lock() {
-            if let Some(ref d) = *d {
-                let _ = d.set_setting("api_custom_url", &url);
-                if let Some(ref k) = api_key {
-                    let _ = d.set_setting("api_custom_key", k);
-                }
-                let _ = d.set_setting("api_custom_model", &model);
-                let _ = d.set_setting("transcription_mode", "custom");
-            }
-        }
-
-        // Update RuntimeState
-        {
-            let mut rt = runtime_save.borrow_mut();
-            rt.active_service = TranscriptionService::Api;
-            rt.active_provider = "custom".to_string();
-            rt.api_base_url = url;
-            rt.api_key = api_key;
-            rt.api_model = model;
-            rt.local_whisper = None;
-        }
-
-        action_save.set_state(&"custom".to_variant());
-
-        show_status(&status_save, "自定义 API 模式");
-        let st = status_save.clone();
-        glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
-            hide_status(&st);
-        });
-
-        dialog_save.close();
-    });
-
-    dialog.present();
 }
 
 // ── Window position ──────────────────────────────────────────────────────────
@@ -1038,85 +975,23 @@ fn download_funasr_binary(bin_dir: &std::path::Path) -> Result<(), String> {
 
     let cursor = std::io::Cursor::new(&bytes[..]);
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        let decoder = flate2::read::GzDecoder::new(cursor);
-        let mut archive = tar::Archive::new(decoder);
-        for result in archive.entries().map_err(|e| format!("读取压缩包失败：{e}"))? {
-            let mut entry = result.map_err(|e| format!("解压项失败：{e}"))?;
-            let name = entry.path().ok().and_then(|p| p.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()));
-            if let Some(ref name) = name {
-                if name == binary_name || name.ends_with(binary_name) {
-                    entry.unpack(&dest).map_err(|e| format!("解压失败：{e}"))?;
-                    #[cfg(unix)] {
-                        use std::os::unix::fs::PermissionsExt;
-                        let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755));
-                    }
-                    return Ok(());
-                }
-            }
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        // Windows: zip extraction
-        let mut archive = zip::ZipArchive::new(cursor).map_err(|e| format!("读取压缩包失败：{e}"))?;
-        for i in 0..archive.len() {
-            let mut entry = archive.by_index(i).map_err(|e| format!("读取项失败：{e}"))?;
-            let name = entry.name().to_string();
-            if name.ends_with(binary_name) || name.contains(binary_name) {
-                let mut out = std::fs::File::create(&dest).map_err(|e| format!("创建文件失败：{e}"))?;
-                std::io::copy(&mut entry, &mut out).map_err(|e| format!("写入文件失败：{e}"))?;
-                return Ok(());
-            }
+    // Zip extraction
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| format!("读取压缩包失败：{e}"))?;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| format!("读取项失败：{e}"))?;
+        let name = entry.name().to_string();
+        if name.ends_with(binary_name) || name.contains(binary_name) {
+            let mut out = std::fs::File::create(&dest).map_err(|e| format!("创建文件失败：{e}"))?;
+            std::io::copy(&mut entry, &mut out).map_err(|e| format!("写入文件失败：{e}"))?;
+            return Ok(());
         }
     }
 
     Err("未找到 FunASR 二进制".into())
 }
 
-// ── macOS window level ───────────────────────────────────────────────────────
-
 // ── Window floating (set topmost / unset topmost) ─────────────────────────────
 
-#[cfg(target_os = "macos")]
-fn macos_set_window_floating(_window: &gtk4::ApplicationWindow) {
-    unsafe {
-        let ns_app: *mut objc::runtime::Object = msg_send![class!(NSApplication), sharedApplication];
-        let windows: *mut objc::runtime::Object = msg_send![ns_app, windows];
-        let count: usize = msg_send![windows, count];
-        for i in 0..count {
-            let win: *mut objc::runtime::Object = msg_send![windows, objectAtIndex: i];
-            let _: () = msg_send![win, setLevel: 7];
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn macos_unset_window_floating(_window: &gtk4::ApplicationWindow) {
-    unsafe {
-        let ns_app: *mut objc::runtime::Object = msg_send![class!(NSApplication), sharedApplication];
-        let windows: *mut objc::runtime::Object = msg_send![ns_app, windows];
-        let count: usize = msg_send![windows, count];
-        for i in 0..count {
-            let win: *mut objc::runtime::Object = msg_send![windows, objectAtIndex: i];
-            let _: () = msg_send![win, setLevel: 0];
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn macos_set_window_floating(window: &gtk4::ApplicationWindow) {
-    set_win32_topmost(window, true);
-}
-
-#[cfg(target_os = "windows")]
-fn macos_unset_window_floating(window: &gtk4::ApplicationWindow) {
-    set_win32_topmost(window, false);
-}
-
-#[cfg(target_os = "windows")]
 fn set_win32_topmost(window: &gtk4::ApplicationWindow, topmost: bool) {
     extern "system" {
         fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
@@ -1140,9 +1015,3 @@ fn set_win32_topmost(window: &gtk4::ApplicationWindow, topmost: bool) {
         }
     }
 }
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn macos_set_window_floating(_window: &gtk4::ApplicationWindow) {}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn macos_unset_window_floating(_window: &gtk4::ApplicationWindow) {}

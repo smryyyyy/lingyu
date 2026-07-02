@@ -31,10 +31,6 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("lingyu");
         std::fs::create_dir_all(&data_dir).ok();
-        #[cfg(unix)] {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700));
-        }
 
         let db_path = data_dir.join("history.db");
         let bin_dir = data_dir.join("bin");
@@ -93,28 +89,9 @@ pub struct FunasrBinary {
     pub url: &'static str,
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-pub const FUNASR_BINARY: FunasrBinary = FunasrBinary {
-    binary_name: "llama-funasr-sensevoice",
-    url: "https://github.com/modelscope/FunASR/releases/download/runtime-llamacpp-v0.1.4/funasr-llamacpp-macos-arm64.tar.gz",
-};
-
-#[cfg(target_os = "windows")]
 pub const FUNASR_BINARY: FunasrBinary = FunasrBinary {
     binary_name: "llama-funasr-sensevoice.exe",
     url: "https://github.com/modelscope/FunASR/releases/download/runtime-llamacpp-v0.1.4/funasr-llamacpp-windows-x64.zip",
-};
-
-#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-pub const FUNASR_BINARY: FunasrBinary = FunasrBinary {
-    binary_name: "llama-funasr-sensevoice",
-    url: "https://github.com/modelscope/FunASR/releases/download/runtime-llamacpp-v0.1.4/funasr-llamacpp-linux-arm64.tar.gz",
-};
-
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub const FUNASR_BINARY: FunasrBinary = FunasrBinary {
-    binary_name: "llama-funasr-sensevoice",
-    url: "https://github.com/modelscope/FunASR/releases/download/runtime-llamacpp-v0.1.4/funasr-llamacpp-linux-x64.tar.gz",
 };
 
 // ── VAD model ─────────────────────────────────────────────────────
