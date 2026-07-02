@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  暗色浮窗语音转文字 — 左键录音，右键切引擎，识别结果自动复制到剪贴板。
+  浮窗语音转文字 — 左键录音，右键切引擎，识别结果自动复制到剪贴板。
 </p>
 
 ---
@@ -28,7 +28,7 @@
 
 ## 功能特点
 
-- **暗色浮窗**：可选置顶的 macOS 浮窗，SVG 麦克风图标，空闲时白色，录音时切换为红色方块
+- **浮窗**：可选置顶的浮窗，SVG 麦克风图标，空闲时白色，录音时切换为红色方块
 - **左键录音**：点击录音/停止 → 异步识别 → 自动复制到剪贴板，全程不打断工作流
 - **右键菜单**：切换本地模型 / 自定义 API / 置顶切换 / 快捷键设置 / 历史记录 / 退出
 - **本地模式**：调 `llama-funasr-sensevoice` 子进程 + SenseVoice GGUF 模型，离线识别
@@ -133,23 +133,3 @@ cargo run --release
 ## 许可证
 
 MIT License
-
-Copyright (c) 2026
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
