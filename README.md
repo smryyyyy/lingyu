@@ -127,10 +127,13 @@ cargo run --release
 | cpal + hound | 实时录音 + WAV 编码 |
 | llama-funasr-sensevoice | FunASR 推理引擎（llama.cpp 后端） |
 | SenseVoice GGUF | 语音识别模型（Q8 / F16） |
-| reqwest (blocking) | API 模式 HTTP 请求 |
+| reqwest (blocking) | API 请求 + 模型下载 |
 | rusqlite | SQLite 历史 + 设置持久化 |
 | arboard | 系统剪贴板 |
+| gdk-pixbuf | SVG 图标渲染 |
+| flate2 + tar + zip | FunASR 二进制解压 |
 | objc (macOS) | 原生窗口置顶 API |
+| SetWindowPos (Windows) | Win32 窗口置顶 |
 
 ## 许可证
 
