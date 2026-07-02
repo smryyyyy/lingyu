@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  浮窗语音转文字 — 左键录音，右键切引擎，识别结果自动复制到剪贴板。
+  暗色浮窗语音转文字 — 左键录音，右键切引擎，识别结果自动复制到剪贴板。
 </p>
 
 ---
@@ -28,7 +28,7 @@
 
 ## 功能特点
 
-- **浮窗**：可选置顶的浮窗，SVG 麦克风图标，空闲时白色，录音时切换为红色方块
+- **暗色浮窗**：可选置顶的浮窗，SVG 麦克风图标，空闲时白色，录音时切换为红色方块
 - **左键录音**：点击录音/停止 → 异步识别 → 自动复制到剪贴板，全程不打断工作流
 - **右键菜单**：切换本地模型 / 自定义 API / 置顶切换 / 快捷键设置 / 历史记录 / 退出
 - **本地模式**：调 `llama-funasr-sensevoice` 子进程 + SenseVoice GGUF 模型，离线识别
@@ -113,7 +113,9 @@ cargo run --release
 ├── icons/
 │   ├── microphone.svg             # 白色麦克风
 │   └── microphone_recording.svg   # 红色方块
-├── Cargo.toml          # 依赖清单
+├── build.rs             # Windows 自动打包 GTK4 DLL
+├── justfile             # 一键安装依赖 + 构建
+├── Cargo.toml           # 依赖清单
 └── README.md
 ```
 
@@ -121,7 +123,7 @@ cargo run --release
 
 | 组件 | 用途 |
 |------|------|
-| Rust + GTK4 | 桌面 UI（透明浮窗 + PopoverMenu） |
+| Rust + GTK4 | 桌面 UI（暗色浮窗 + PopoverMenu） |
 | cpal + hound | 实时录音 + WAV 编码 |
 | llama-funasr-sensevoice | FunASR 推理引擎（llama.cpp 后端） |
 | SenseVoice GGUF | 语音识别模型（Q8 / F16） |
