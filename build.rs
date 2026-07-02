@@ -1,11 +1,10 @@
 fn main() {
     #[cfg(target_os = "windows")]
     {
-        // Auto-bundle GTK4 DLLs from MSYS2 UCRT64 into the build output.
-        // After `cargo build`, the .exe and all required DLLs are in
-        // target/debug/ or target/release/, ready to run.
+        use std::path::Path;
+
         let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
-        let target_dir = std::path::Path::new("target").join(&profile);
+        let target_dir = Path::new("target").join(&profile);
         std::fs::create_dir_all(&target_dir).ok();
 
         // Common MSYS2 UCRT64 install paths
@@ -14,55 +13,69 @@ fn main() {
             r"C:\tools\msys64\ucrt64\bin",
             r"C:\msys2\ucrt64\bin",
         ];
-        let ucrt64_bin = candidates.iter().find(|p| std::path::Path::new(p).join("libgtk-4-1.dll").exists());
+        let ucrt64_bin = candidates
+            .iter()
+            .find(|p| Path::new(p).join("libgtk-4-1.dll").exists());
 
-        if let Some(bin_dir) = ucrt64_bin {
-            let bin_dir = std::path::Path::new(bin_dir);
+        let Some(bin_dir) = ucrt64_bin else {
+            println!("cargo:warning=LingYu: MSYS2 UCRT64 not found. Build will work but the .exe won't run without GTK4 DLLs. Run `just deps` in an MSYS2 UCRT64 terminal first.");
+            return;
+        };
+        let bin_dir = Path::new(bin_dir);
 
-            // Core GTK4 DLLs (the minimal set; gtk4-rs will pull in more via dependency)
-            let dlls = [
-                "libgtk-4-1.dll",
-                "libgdk-4-1.dll",
-                "libgdk_pixbuf-2.0-0.dll",
-                "libpangocairo-1.0-0.dll",
-                "libpango-1.0-0.dll",
-                "libpangowin32-1.0-0.dll",
-                "libharfbuzz-0.dll",
-                "libcairo-2.dll",
-                "libcairo-gobject-2.dll",
-                "libgio-2.0-0.dll",
-                "libglib-2.0-0.dll",
-                "libgobject-2.0-0.dll",
-                "libgmodule-2.0-0.dll",
-                "libintl-8.dll",
-                "libpcre2-8-0.dll",
-                "libffi-8.dll",
-                "libepoxy-0.dll",
-                "libfribidi-0.dll",
-                "libpixman-1-0.dll",
-                "libpng16-16.dll",
-                "libgraphene-1.0-0.dll",
-                "zlib1.dll",
-                "libstdc++-6.dll",      // C++ runtime (GTK/GDK have C++ deps)
-                "libwinpthread-1.dll",   // MinGW pthread
-                "libgcc_s_seh-1.dll",    // MinGW GCC runtime
-            ];
+        // Scan UCRT64 bin dir for GTK4-related DLLs (auto-detects version changes)
+        let mut copied = 0u32;
+        if let Ok(entries) = std::fs::read_dir(bin_dir) {
+            for entry in entries.flatten() {
+                let Some(name) = entry.file_name().to_str().map(|s| s.to_string()) else { continue };
+                if !name.ends_with(".dll") {
+                    continue;
+                }
+                let lower = name.to_lowercase();
 
-            let mut copied = 0;
-            for dll in &dlls {
-                let src = bin_dir.join(dll);
-                let dst = target_dir.join(dll);
-                if src.exists() && !dst.exists() {
-                    if std::fs::copy(&src, &dst).is_ok() {
-                        copied += 1;
-                    }
+                // Match known GTK4/mingw dependency prefixes
+                let is_gtk_dep = lower.starts_with("libgtk-4")
+                    || lower.starts_with("libgdk-4")
+                    || lower.starts_with("libgdk_pixbuf")
+                    || lower.starts_with("libglib-2.0")
+                    || lower.starts_with("libgobject-2.0")
+                    || lower.starts_with("libgio-2.0")
+                    || lower.starts_with("libgmodule-2.0")
+                    || lower.starts_with("libpango")
+                    || lower.starts_with("libpangocairo")
+                    || lower.starts_with("libpangowin32")
+                    || lower.starts_with("libcairo")
+                    || lower.starts_with("libharfbuzz")
+                    || lower.starts_with("libfribidi")
+                    || lower.starts_with("libpixman")
+                    || lower.starts_with("libpng")
+                    || lower.starts_with("libepoxy")
+                    || lower.starts_with("libgraphene")
+                    || lower.starts_with("libpcre2")
+                    || lower.starts_with("libffi")
+                    || lower.starts_with("libintl")
+                    || lower.starts_with("libiconv")
+                    || lower.starts_with("libstdc++")
+                    || lower.starts_with("libwinpthread")
+                    || lower.starts_with("libgcc_s")
+                    || lower == "zlib1.dll";
+
+                if !is_gtk_dep {
+                    continue;
+                }
+
+                let dst = target_dir.join(&name);
+                if dst.exists() {
+                    continue; // already copied on a previous build
+                }
+                if std::fs::copy(&entry.path(), &dst).is_ok() {
+                    copied += 1;
                 }
             }
-            if copied > 0 {
-                println!("cargo:warning=LingYu: bundled {} GTK4 DLLs to target/{profile}", copied);
-            }
-        } else {
-            println!("cargo:warning=LingYu: MSYS2 UCRT64 not found at C:\\msys64\\ucrt64\\bin. Run `just deps` in an MSYS2 UCRT64 terminal first.");
+        }
+
+        if copied > 0 {
+            println!("cargo:warning=LingYu: bundled {copied} GTK4 DLLs to target/{profile}");
         }
     }
 }
