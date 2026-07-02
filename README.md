@@ -1,4 +1,4 @@
-# 灵语（LingYu）
+<h1 align="center">灵语（LingYu）</h1>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Rust-1.85+-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust">
@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  透明浮窗语音转文字 — 左键录音，右键切引擎，识别结果自动复制到剪贴板。
+  暗色浮窗语音转文字 — 左键录音，右键切引擎，识别结果自动复制到剪贴板。
 </p>
 
 ---
@@ -28,7 +28,7 @@
 
 ## 功能特点
 
-- **透明浮窗**：始终置顶的 macOS 透明窗口，SVG 麦克风图标，空闲时白色，录音时切换为红色方块
+- **暗色浮窗**：可选置顶的 macOS 浮窗，SVG 麦克风图标，空闲时白色，录音时切换为红色方块
 - **左键录音**：点击录音/停止 → 异步识别 → 自动复制到剪贴板，全程不打断工作流
 - **右键菜单**：切换本地模型 / 自定义 API / 置顶切换 / 快捷键设置 / 历史记录 / 退出
 - **本地模式**：调 `llama-funasr-sensevoice` 子进程 + SenseVoice GGUF 模型，离线识别
@@ -37,7 +37,7 @@
 - **VAD 检测**：集成 fsmn-vad 模型，自动过滤静音段
 - **快捷键**：F1-F12 可选，DB 持久化，实时生效
 - **历史记录**：SQLite 存储 50 条最近识别记录
-- **跨平台**：macOS ARM64 / Windows x64 / Linux ARM64 + x64
+- **跨平台**：macOS ARM64 / Windows x64
 - **调试日志**：所有错误写入 `~/lingyu-debug.log`，UI 保持简洁
 
 ## 快速开始
