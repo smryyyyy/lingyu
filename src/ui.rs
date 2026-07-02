@@ -609,11 +609,12 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
 
     // ── Always on top ──
     let aat_action = gtk4::gio::SimpleAction::new_stateful("always-on-top", None, &config.always_on_top.to_variant());
+    let win_aat = window.clone();
     aat_action.connect_activate(move |action, _| {
         let new_state = !action.state().and_then(|s| s.get::<bool>()).unwrap_or(true);
         action.change_state(&new_state.to_variant());
-        if new_state { macos_set_window_floating(); }
-        else { macos_unset_window_floating(); }
+        if new_state { macos_set_window_floating(&win_aat); }
+        else { macos_unset_window_floating(&win_aat); }
     });
     app.add_action(&aat_action);
 
@@ -773,7 +774,7 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     });
 
     // Default: always-on-top
-    macos_set_window_floating();
+    macos_set_window_floating(&window);
 }
 
 // ── Error logging helper ──────────────────────────────────────────────────────
@@ -1077,8 +1078,10 @@ fn download_funasr_binary(bin_dir: &std::path::Path) -> Result<(), String> {
 
 // ── macOS window level ───────────────────────────────────────────────────────
 
+// ── Window floating (set topmost / unset topmost) ─────────────────────────────
+
 #[cfg(target_os = "macos")]
-fn macos_set_window_floating() {
+fn macos_set_window_floating(_window: &gtk4::ApplicationWindow) {
     unsafe {
         let ns_app: *mut objc::runtime::Object = msg_send![class!(NSApplication), sharedApplication];
         let windows: *mut objc::runtime::Object = msg_send![ns_app, windows];
@@ -1090,11 +1093,8 @@ fn macos_set_window_floating() {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn macos_set_window_floating() {}
-
 #[cfg(target_os = "macos")]
-fn macos_unset_window_floating() {
+fn macos_unset_window_floating(_window: &gtk4::ApplicationWindow) {
     unsafe {
         let ns_app: *mut objc::runtime::Object = msg_send![class!(NSApplication), sharedApplication];
         let windows: *mut objc::runtime::Object = msg_send![ns_app, windows];
@@ -1106,5 +1106,43 @@ fn macos_unset_window_floating() {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn macos_unset_window_floating() {}
+#[cfg(target_os = "windows")]
+fn macos_set_window_floating(window: &gtk4::ApplicationWindow) {
+    set_win32_topmost(window, true);
+}
+
+#[cfg(target_os = "windows")]
+fn macos_unset_window_floating(window: &gtk4::ApplicationWindow) {
+    set_win32_topmost(window, false);
+}
+
+#[cfg(target_os = "windows")]
+fn set_win32_topmost(window: &gtk4::ApplicationWindow, topmost: bool) {
+    extern "system" {
+        fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
+        fn SetWindowPos(
+            hWnd: isize, hWndInsertAfter: isize,
+            X: i32, Y: i32, cx: i32, cy: i32, uFlags: u32,
+        ) -> i32;
+    }
+    const HWND_TOPMOST: isize = -1;
+    const HWND_NOTOPMOST: isize = -2;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOSIZE: u32 = 0x0001;
+
+    let title = window.title().unwrap_or_default();
+    let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
+        if hwnd != 0 {
+            let insert = if topmost { HWND_TOPMOST } else { HWND_NOTOPMOST };
+            SetWindowPos(hwnd, insert, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn macos_set_window_floating(_window: &gtk4::ApplicationWindow) {}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn macos_unset_window_floating(_window: &gtk4::ApplicationWindow) {}

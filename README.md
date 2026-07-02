@@ -45,7 +45,8 @@
 ### 前置条件
 
 - Rust 工具链（`rustup` 安装）
-- GTK4 及开发库（macOS: `brew install gtk4 pkgconf cmake`）
+- macOS: `brew install gtk4 pkgconf cmake`
+- Windows: 安装 [MSYS2](https://www.msys2.org/) → 打开 UCRT64 终端 → `pacman -S mingw-w64-ucrt-x86_64-gtk4 mingw-w64-ucrt-x86_64-pkgconf`
 
 ### 从源码构建
 
@@ -62,6 +63,8 @@ cargo build --release
 # 运行
 cargo run --release
 ```
+
+> **Windows 用户**：`build.rs` 会自动将 MSYS2 UCRT64 的 GTK4 DLL 复制到 `target/release/`，构建完成后 `.exe` 开箱即用，无需手动设置 PATH。
 
 ### 首次启动
 
