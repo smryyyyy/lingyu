@@ -43,7 +43,7 @@ impl Config {
             .unwrap_or(true);
 
         let record_shortcut = std::env::var("RECORD_SHORTCUT")
-            .unwrap_or_else(|_| "F6".into());
+            .unwrap_or_else(|_| "F10".into());
 
         Self { api_base_url, api_key, api_model, db_path, bin_dir, models_dir, always_on_top, record_shortcut }
     }

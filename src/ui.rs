@@ -16,6 +16,8 @@ use crate::local_stt::LocalWhisper;
 const CSS: &str = r#"
     window.main-window {
         background-color: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.8);
+        border-radius: 12px;
     }
     .mic-btn {
         min-width: 72px;
@@ -27,7 +29,7 @@ const CSS: &str = r#"
         font-size: 32px;
         font-weight: 600;
         border: none;
-        box-shadow: none;
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6), 0 0 0 2px rgba(255, 255, 255, 0.08);
         outline: none;
         -gtk-icon-shadow: none;
         -gtk-icon-size: 32px;
@@ -36,12 +38,12 @@ const CSS: &str = r#"
     .mic-btn:hover {
         background-image: none;
         background-color: #b91c1c;
-        box-shadow: none;
+        box-shadow: 0 6px 28px rgba(0, 0, 0, 0.7), 0 0 0 2px rgba(255, 255, 255, 0.12);
     }
     .mic-btn:active {
         background-image: none;
         background-color: #991b1b;
-        box-shadow: none;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.7), inset 0 1px 3px rgba(0, 0, 0, 0.3);
     }
     .mic-btn.recording,
     .mic-btn.recording:hover {
@@ -609,32 +611,72 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
         let label = gtk4::Label::new(Some("选择快捷键："));
         content.append(&label);
 
-        let combo = gtk4::DropDown::from_strings(&[
-            "F1", "F2", "F3", "F4", "F5", "F6",
-            "F7", "F8", "F9", "F10", "F11", "F12",
-        ]);
-        combo.set_selected(5);
-        content.append(&combo);
+        // Shortcut selector: radio buttons grid (reliable, no GTK DropDown issues)
+        use gtk4::prelude::*;
+        let grid = gtk4::Grid::new();
+        grid.set_row_spacing(4);
+        grid.set_column_spacing(8);
+        let keys = ["F1","F2","F3","F4","F5","F6","F7","F8","F9","F10","F11","F12"];
+        
+        // Read current shortcut from file (default F10)
+        let shortcut_file = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("shortcut.txt")))
+            .unwrap_or_else(|| std::path::PathBuf::from("shortcut.txt"));
+        let current_shortcut = std::fs::read_to_string(&shortcut_file)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|_| "F10".to_string());
+        let current_idx = keys.iter().position(|&k| k == current_shortcut.as_str()).unwrap_or(9);
 
-        let app_dialog = app_sc.clone();
-        let db_s = Arc::clone(&db_sc);
+        let radio_group = std::cell::RefCell::new(Option::<gtk4::CheckButton>::None);
+        for (i, key) in keys.iter().enumerate() {
+            let btn = gtk4::CheckButton::with_label(key);
+            btn.set_group(radio_group.borrow().as_ref());
+            if radio_group.borrow().is_none() {
+                radio_group.borrow_mut().replace(btn.clone());
+            }
+            if i == current_idx {
+                btn.set_active(true);
+            }
+            let (row, col) = (i / 4, i % 4);
+            grid.attach(&btn, col as i32, row as i32, 1, 1);
+        }
+        content.append(&grid);
+
         let st = status_sc.clone();
+        let grid2 = grid.clone();
 
         dialog.connect_response(move |d, resp| {
             if resp == gtk4::ResponseType::Accept {
-                let idx = combo.selected().to_string();
-                let shortcut = match idx.as_str() {
-                    "0" => "F1", "1" => "F2", "2" => "F3", "3" => "F4",
-                    "4" => "F5", "5" => "F6", "6" => "F7", "7" => "F8",
-                    "8" => "F9", "9" => "F10", "10" => "F11", "11" => "F12",
-                    _ => "F6",
+                // Find active radio button from the grid
+                let shortcut = ['F'; 12].iter().enumerate()
+                    .filter_map(|(i, _)| {
+                        let col = (i % 4) as i32;
+                        let row = (i / 4) as i32;
+                        grid2.child_at(col, row)
+                            .and_then(|c| c.downcast::<gtk4::CheckButton>().ok())
+                    })
+                    .find(|btn| btn.is_active())
+                    .and_then(|btn| btn.label())
+                    .unwrap_or_else(|| "F10".to_string().into());
+
+                let vk = match shortcut.as_str() {
+                    "F1" => 0x70u32, "F2" => 0x71, "F3" => 0x72, "F4" => 0x73,
+                    "F5" => 0x74, "F6" => 0x75, "F7" => 0x76, "F8" => 0x77,
+                    "F9" => 0x78, "F10" => 0x79, "F11" => 0x7A, "F12" => 0x7B,
+                    _ => 0x79,
                 };
-                if let Ok(dg) = db_s.lock() {
-                    if let Some(ref dg) = *dg {
-                        let _ = dg.set_setting("record_shortcut", shortcut);
+                // Save to file in exe directory
+                if let Ok(exe_path) = std::env::current_exe() {
+                    if let Some(parent) = exe_path.parent() {
+                        let fpath = parent.join("shortcut.txt");
+                        let _ = std::fs::write(&fpath, &shortcut);
                     }
                 }
-                app_dialog.set_accels_for_action("app.record", &[shortcut]);
+                // Update helper VK via shared memory (if helper running)
+                crate::helper::update_vk(vk);
+                // Update RAW_VK for GTK subclass immediately
+                RAW_VK.store(vk, Ordering::SeqCst);
                 show_status(&st, &format!("快捷键：{shortcut}"));
                 let st2 = st.clone();
                 glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || hide_status(&st2));
@@ -670,7 +712,7 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     about_action.connect_activate(move |_, _| {
         let about = gtk4::AboutDialog::new();
         about.set_program_name(Some("灵语"));
-        about.set_version(Some("0.1.0"));
+        about.set_version(Some("1.0.0"));
         about.set_comments(Some("浮窗语音转文字\n本地 SenseVoice + API 模式"));
         about.set_license_type(gtk4::License::MitX11);
         about.set_transient_for(Some(&win_about));
@@ -681,40 +723,159 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     // ── Quit ──
     let app_q = app.clone();
     let quit_action = gtk4::gio::SimpleAction::new("quit", None);
-    quit_action.connect_activate(move |_, _| { app_q.quit(); });
+    quit_action.connect_activate(move |_, _| {
+        // Signal helper to exit and force process termination
+        crate::helper::signal_exit();
+        std::process::exit(0);
+    });
     app.add_action(&quit_action);
 
-    // ── Register keyboard shortcut ──
-    let sc_key = db.lock().ok()
-        .and_then(|d| d.as_ref().and_then(|d| d.get_setting("record_shortcut").ok().flatten()))
-        .unwrap_or_else(|| "F6".to_string());
+    // ── Global hotkey (GTK subclass + Helper IPC) ──
+    // Primary: GTK window subclass + Raw Input (works for medium-integrity windows).
+    // Supplementary: elevated helper process via shared memory IPC (desktop/admin).
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-    // ── Global hotkey polling (GetAsyncKeyState) ──
+    static RAW_VK: AtomicU32 = AtomicU32::new(0);
+    static RAW_PRESSED: AtomicBool = AtomicBool::new(false);
+
+    // Read hotkey VK from shortcut.txt
     {
-        let vk_code: i32 = match sc_key.as_str() {
-            "F1" => 0x70, "F2" => 0x71, "F3" => 0x72, "F4" => 0x73,
-            "F5" => 0x74, "F6" => 0x75, "F7" => 0x76, "F8" => 0x77,
-            "F9" => 0x78, "F10" => 0x79, "F11" => 0x7A, "F12" => 0x7B,
-            _ => 0x75,
-        };
-        extern "system" {
-            fn GetAsyncKeyState(vKey: i32) -> i16;
+        let key_name = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("shortcut.txt")))
+            .and_then(|f| std::fs::read_to_string(f).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "F10".to_string());
+        RAW_VK.store(match key_name.as_str() {
+                "F1" => 0x70u32, "F2" => 0x71, "F3" => 0x72, "F4" => 0x73,
+                "F5" => 0x74, "F6" => 0x75, "F7" => 0x76, "F8" => 0x77,
+                "F9" => 0x78, "F10" => 0x79, "F11" => 0x7A, "F12" => 0x7B,
+                _ => 0x79,
+            }, Ordering::SeqCst);
         }
-        let was_down = Rc::new(std::cell::RefCell::new(false));
-        let was_down_hk = Rc::clone(&was_down);
+
+        // GTK window subclass + Raw Input (fallback for when helper isn't available)
+        let window_sub = window.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(200), move || {
+            extern "system" {
+                fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
+                fn SetWindowLongPtrW(hWnd: isize, nIndex: i32, dwNewLong: isize) -> isize;
+                fn CallWindowProcW(lpPrevWndFunc: isize, hWnd: isize, Msg: u32, wParam: usize, lParam: isize) -> isize;
+                fn RegisterRawInputDevices(pRawInputDevices: *const std::ffi::c_void, uiNumDevices: u32, cbSize: u32) -> i32;
+                fn GetRawInputData(hRawInput: isize, uiCommand: u32, pData: *mut std::ffi::c_void, pcbSize: *mut u32, cbSizeHeader: u32) -> u32;
+                fn ChangeWindowMessageFilterEx(hWnd: isize, message: u32, action: u32, pChangeFilter: *mut std::ffi::c_void) -> i32;
+            }
+
+            const WM_INPUT: u32 = 0x00FF;
+            const RID_INPUT: u32 = 0x10000003;
+            const RIM_TYPEKEYBOARD: u32 = 1;
+            const RIDEV_INPUTSINK: u32 = 0x00000100;
+            const RI_KEY_BREAK: u16 = 0x0001;
+            const HID_USAGE_PAGE_GENERIC: u16 = 0x01;
+            const HID_USAGE_GENERIC_KEYBOARD: u16 = 0x06;
+            const GWLP_WNDPROC: i32 = -4;
+            const MSGFLT_ADD: u32 = 1;
+
+            #[repr(C)]
+            struct RAWINPUTDEVICE {
+                usUsagePage: u16,
+                usUsage: u16,
+                dwFlags: u32,
+                hwndTarget: isize,
+            }
+
+            static mut OLD_PROC: isize = 0;
+
+            unsafe extern "system" fn sub_wnd_proc(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize {
+                if msg == WM_INPUT {
+                    let target_vk = RAW_VK.load(Ordering::SeqCst);
+                    let mut size: u32 = 64;
+                    let mut buf: [u8; 64] = std::mem::zeroed();
+                    let ret = GetRawInputData(lparam, RID_INPUT, buf.as_mut_ptr() as *mut _, &mut size, 24);
+                    if ret != 0xFFFFFFFF && size >= 40 {
+                        let dw_type = u32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]);
+                        if dw_type == RIM_TYPEKEYBOARD {
+                            let vkey = u16::from_ne_bytes([buf[30], buf[31]]);
+                            let flags = u16::from_ne_bytes([buf[26], buf[27]]);
+                            if vkey as u32 == target_vk {
+                                let pressed = (flags & RI_KEY_BREAK) == 0;
+                                RAW_PRESSED.store(pressed, Ordering::SeqCst);
+                            }
+                        }
+                    }
+                    return 0;
+                }
+                CallWindowProcW(OLD_PROC, hwnd, msg, wparam, lparam)
+            }
+
+            unsafe {
+                let title = window_sub.title().unwrap_or_default();
+                let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+                let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
+                if hwnd == 0 { return; }
+
+                OLD_PROC = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, sub_wnd_proc as isize);
+
+                let rid = RAWINPUTDEVICE {
+                    usUsagePage: HID_USAGE_PAGE_GENERIC,
+                    usUsage: HID_USAGE_GENERIC_KEYBOARD,
+                    dwFlags: RIDEV_INPUTSINK,
+                    hwndTarget: hwnd,
+                };
+                RegisterRawInputDevices(&rid as *const _ as *const std::ffi::c_void, 1,
+                    std::mem::size_of::<RAWINPUTDEVICE>() as u32);
+
+                ChangeWindowMessageFilterEx(hwnd, WM_INPUT, MSGFLT_ADD, std::ptr::null_mut());
+            }
+        });
+
+        // Connect to elevated helper (try now, and keep retrying in timer)
+        let mut helper_reader = crate::helper::try_connect();
+        if helper_reader.is_some() {
+            crate::log::debug("helper process connected via shared memory");
+            // Sync initial VK to helper
+            let vk = RAW_VK.load(Ordering::SeqCst);
+            crate::helper::update_vk(vk);
+        } else {
+            crate::log::debug("helper not connected, will retry in timer");
+        }
+
+        // Timer: poll helper IPC + GTK subclass for hold-to-talk
         let state_hk = Rc::clone(&state);
         let recorder_hk = Rc::clone(&recorder);
         let button_hk = button.clone();
         let status_hk = status.clone();
         let runtime_hk = Rc::clone(&runtime);
         let db_hk = Arc::clone(&db);
-        glib::timeout_add_local(std::time::Duration::from_millis(80), move || {
-            let now_down = unsafe { GetAsyncKeyState(vk_code) as u16 & 0x8000 != 0 };
-            let prev_down = *was_down_hk.borrow();
-            *was_down_hk.borrow_mut() = now_down;
+        let was_down = Rc::new(std::cell::RefCell::new(false));
+        let was_down_2 = Rc::clone(&was_down);
+        let tick = Rc::new(std::cell::RefCell::new(0u32));
+        let tick2 = Rc::clone(&tick);
+        glib::timeout_add_local(std::time::Duration::from_millis(30), move || {
+            *tick2.borrow_mut() += 1;
+            let t = *tick2.borrow();
 
-            // Push-to-talk: key down → start, key up → stop
-            if now_down && !prev_down && *state_hk.borrow() == State::Idle {
+            // Retry helper connection every 500ms (~17 ticks)
+            if helper_reader.is_none() && t % 17 == 1 {
+                helper_reader = crate::helper::try_connect();
+                if helper_reader.is_some() {
+                    crate::log::debug("helper connected on retry");
+                }
+            }
+
+            // Read from helper IPC if available, otherwise from GTK subclass
+            let helper_down = helper_reader.as_ref()
+                .map(|h| h.is_key_pressed())
+                .unwrap_or(false);
+            let gtk_down = RAW_PRESSED.load(Ordering::SeqCst);
+            let down = helper_down || gtk_down;
+
+            let prev = *was_down_2.borrow();
+            *was_down_2.borrow_mut() = down;
+
+            let state_val = *state_hk.borrow();
+
+            if down && !prev && state_val == State::Idle {
                 if let Err(e) = recorder_hk.borrow_mut().start() {
                     log_error(&format!("全局热键录音失败：{e}"));
                     show_status(&status_hk, "错误，看日志");
@@ -723,7 +884,7 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                 *state_hk.borrow_mut() = State::Recording;
                 button_hk.add_css_class("recording");
                 show_status(&status_hk, "录音中...");
-            } else if !now_down && prev_down && *state_hk.borrow() == State::Recording {
+            } else if !down && prev && state_val == State::Recording {
                 stop_and_transcribe(
                     &state_hk, &recorder_hk, &button_hk,
                     &status_hk, &db_hk, &runtime_hk,
@@ -731,7 +892,6 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
             }
             glib::ControlFlow::Continue
         });
-    }
 
     // ── Window position + present ──
     position_window(&window, &db);

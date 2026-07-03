@@ -1,6 +1,6 @@
 [package]
 name = "lingyu"
-version = "0.1.0"
+version = "1.0.0"
 description = "浮窗一键语音转文字（STT）桌面应用"
 edition = "2021"
 

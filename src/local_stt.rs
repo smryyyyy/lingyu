@@ -41,6 +41,14 @@ impl LocalWhisper {
         }
         if let Some(ref vad) = self.vad_path { cmd.arg("--vad").arg(vad); }
 
+        // Hide console window on Windows
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
         let output = cmd.output().map_err(|e| format!("启动 FunASR 失败：{e}"))?;
         let _ = std::fs::remove_file(&wav_path);
 
