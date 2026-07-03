@@ -33,19 +33,20 @@
 
 ## 快速开始
 
-### 前置条件
+### 1、直接下载
 
-- 安装 [MSYS2](https://www.msys2.org/)
-- 打开 **MINGW64 终端**（不是 MSYS2、不是 UCRT64、不是 PowerShell）
-- 安装依赖：
+从 [Releases](https://github.com/your/lingyu/releases) 下载 `lingyu-v1.0.0-win64.zip`，解压到任意空文件夹，双击 `lingyu.exe` 即可使用。
+
+首次启动会自动下载 FunASR 引擎（`llama-funasr-sensevoice.exe`）和 VAD 模型到 `%LOCALAPPDATA%\\lingyu\\`。选择本地引擎后会自动下载对应的 SenseVoice GGUF 模型。
+
+首次启动会弹出 **UAC 提权对话框**（全局热键需要），点是即可。如果拒绝，GTK 子类化回退方案仍然在普通窗口下可用。
+
+### 2、自主构建
+
+需要 [MSYS2](https://www.msys2.org/)，打开 **MINGW64 终端**安装依赖：
 
 ```bash
 pacman -S mingw-w64-x86_64-gtk4 mingw-w64-x86_64-pkgconf mingw-w64-x86_64-gcc mingw-w64-x86_64-rust mingw-w64-x86_64-ntldd mingw-w64-x86_64-libwinpthread
-```
-
-### 从源码构建
-
-```bash
 git clone https://github.com/your/lingyu.git
 cd lingyu
 cargo build --release
@@ -53,15 +54,11 @@ cargo build --release
 
 > `build.rs` 会自动将 MSYS2 MINGW64 的 GTK4 DLL 复制到 `target/release/`，构建完成后 `.exe` 开箱即用。
 
-### 首次启动
+构建产物：
 
 ```bash
-./target/release/lingyu.exe --debug
+./target/release/lingyu.exe --debug   # 首次建议加 --debug 查看日志
 ```
-
-首次启动会自动下载 FunASR 引擎（`llama-funasr-sensevoice.exe`）和 VAD 模型到 `%LOCALAPPDATA%\lingyu\`。选择本地引擎后会自动下载对应的 SenseVoice GGUF 模型。
-
-首次启动会弹出 **UAC 提权对话框**（全局热键需要），点是即可。如果拒绝，GTK 子类化回退方案仍然在普通窗口下可用。
 
 ### 手动下载模型
 
