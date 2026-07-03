@@ -710,13 +710,73 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     let win_about = window.clone();
     let about_action = gtk4::gio::SimpleAction::new("about", None);
     about_action.connect_activate(move |_, _| {
-        let about = gtk4::AboutDialog::new();
-        about.set_program_name(Some("灵语"));
-        about.set_version(Some("1.0.0"));
-        about.set_comments(Some("浮窗语音转文字\n本地 SenseVoice + API 模式"));
-        about.set_license_type(gtk4::License::MitX11);
-        about.set_transient_for(Some(&win_about));
-        about.present();
+        let dialog = gtk4::Dialog::builder()
+            .title("关于灵语")
+            .transient_for(&win_about)
+            .modal(true)
+            .default_width(500)
+            .default_height(400)
+            .build();
+
+        let content_area = dialog.content_area();
+        content_area.set_orientation(gtk4::Orientation::Vertical);
+        content_area.set_spacing(8);
+        content_area.set_margin_start(16);
+        content_area.set_margin_end(16);
+        content_area.set_margin_top(16);
+        content_area.set_margin_bottom(16);
+
+        let title = gtk4::Label::new(Some("灵语 v1.0.0"));
+        title.set_markup("<b>灵语 v1.0.0</b>");
+        title.set_halign(gtk4::Align::Start);
+        content_area.append(&title);
+
+        let desc = gtk4::Label::new(Some("浮窗语音转文字 — 本地 SenseVoice 模型"));
+        desc.set_halign(gtk4::Align::Start);
+        content_area.append(&desc);
+        content_area.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
+
+        let models = [
+            ("VAD 模型 (~1.7 MB)", "fsmn-vad.gguf", "https://huggingface.co/FunAudioLLM/fsmn-vad-GGUF/resolve/main/fsmn-vad.gguf"),
+            ("SenseVoice Q8 (~242 MB)", "sensevoice-small-q8.gguf", "https://huggingface.co/FunAudioLLM/SenseVoiceSmall-GGUF/resolve/main/sensevoice-small-q8.gguf"),
+            ("SenseVoice F16 (~470 MB)", "sensevoice-small-f16.gguf", "https://huggingface.co/FunAudioLLM/SenseVoiceSmall-GGUF/resolve/main/sensevoice-small-f16.gguf"),
+            ("FunASR 引擎 (~1.4 MB)", "llama-funasr-sensevoice.exe", "https://github.com/modelscope/FunASR/releases/download/runtime-llamacpp-v0.1.4/funasr-llamacpp-windows-x64.zip"),
+        ];
+
+        for (name, _filename, url) in &models {
+            let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+
+            let label = gtk4::Label::new(Some(name));
+            label.set_halign(gtk4::Align::Start);
+            label.set_hexpand(true);
+            row.append(&label);
+
+            let link = gtk4::LinkButton::new(url);
+            link.set_label("下载");
+            link.set_halign(gtk4::Align::End);
+            row.append(&link);
+
+            content_area.append(&row);
+        }
+
+        content_area.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
+
+        let path_label = gtk4::Label::new(None);
+        path_label.set_markup("存放路径: <tt>%LOCALAPPDATA%\\lingyu\\models\\</tt>");
+        path_label.set_halign(gtk4::Align::Start);
+        path_label.set_wrap(true);
+        path_label.set_max_width_chars(50);
+        content_area.append(&path_label);
+
+        let bin_label = gtk4::Label::new(None);
+        bin_label.set_markup("引擎存放: <tt>%LOCALAPPDATA%\\lingyu\\bin\\</tt>");
+        bin_label.set_halign(gtk4::Align::Start);
+        bin_label.set_wrap(true);
+        bin_label.set_max_width_chars(50);
+        content_area.append(&bin_label);
+
+        dialog.add_button("关闭", gtk4::ResponseType::Ok);
+        dialog.present();
     });
     app.add_action(&about_action);
 

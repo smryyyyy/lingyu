@@ -9,18 +9,18 @@ fn main() {
         let target_dir = Path::new("target").join(&profile);
         std::fs::create_dir_all(&target_dir).ok();
 
-        // Common MSYS2 UCRT64 install paths
+        // Common MSYS2 MINGW64 install paths (standalone Windows compatible)
         let candidates = [
-            r"C:\msys64\ucrt64\bin",
-            r"C:\tools\msys64\ucrt64\bin",
-            r"C:\msys2\ucrt64\bin",
+            r"C:\msys64\mingw64\bin",
+            r"C:\tools\msys64\mingw64\bin",
+            r"C:\msys2\mingw64\bin",
         ];
-        let ucrt64_bin = candidates
+        let mingw_candidates = candidates
             .iter()
             .find(|p| Path::new(p).join("libgtk-4-1.dll").exists());
 
-        let Some(bin_dir) = ucrt64_bin else {
-            println!("cargo:warning=LingYu: MSYS2 UCRT64 not found. Build will work but the .exe won't run without GTK4 DLLs. Run `just deps` in an MSYS2 UCRT64 terminal first.");
+        let Some(bin_dir) = mingw_candidates else {
+            println!("cargo:warning=LingYu: MSYS2 MINGW64 not found. Build will work but the .exe won't run without GTK4 DLLs. Run `pacman -S mingw-w64-x86_64-gtk4` in MINGW64 terminal first.");
             return;
         };
         let bin_dir = Path::new(bin_dir);
@@ -96,8 +96,8 @@ fn main() {
         }
 
         // Also resolve deps of gdk-pixbuf loader DLLs (loaded at runtime)
-        let ucrt64_root = bin_dir.parent().unwrap();
-        let loaders_src = ucrt64_root.join("lib\\gdk-pixbuf-2.0\\2.10.0\\loaders");
+        let mingw_root = bin_dir.parent().unwrap();
+        let loaders_src = mingw_root.join("lib\\gdk-pixbuf-2.0\\2.10.0\\loaders");
         if has_ntldd && loaders_src.exists() {
             if let Ok(entries) = std::fs::read_dir(&loaders_src) {
                 for entry in entries.flatten() {
@@ -127,11 +127,10 @@ fn main() {
         }
 
         // ── Copy gdk-pixbuf format loaders (SVG, etc.) ──
-        let ucrt64_root = bin_dir.parent().unwrap();
-        let loaders_src = ucrt64_root
-            .join("lib\\gdk-pixbuf-2.0\\2.10.0\\loaders");
+        let mingw_root = bin_dir.parent().unwrap();
+        let loaders_src = mingw_root.join("lib\\gdk-pixbuf-2.0\\2.10.0\\loaders");
         let loaders_dst = target_dir.join("lib\\gdk-pixbuf-2.0\\2.10.0\\loaders");
-        let query_loaders = ucrt64_root.join("bin\\gdk-pixbuf-query-loaders.exe");
+        let query_loaders = mingw_root.join("bin\\gdk-pixbuf-query-loaders.exe");
 
         if loaders_src.exists() && query_loaders.exists() {
             std::fs::create_dir_all(&loaders_dst).ok();

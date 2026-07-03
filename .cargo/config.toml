@@ -1,0 +1,6 @@
+[target.x86_64-pc-windows-gnu]
+# Keep crt-static so exe doesn't need libwinpthread at load time
+# DLLs from mingw64 will still load their own copy
+rustflags = ["-C", "target-feature=+crt-static"]
+# Use mingw64 (not UCRT64) linker
+linker = "C:/msys64/mingw64/bin/x86_64-w64-mingw32-gcc.exe"

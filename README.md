@@ -36,11 +36,11 @@
 ### 前置条件
 
 - 安装 [MSYS2](https://www.msys2.org/)
-- 打开 **UCRT64 终端**（不是 MSYS2、不是 MINGW64、不是 PowerShell）
+- 打开 **MINGW64 终端**（不是 MSYS2、不是 UCRT64、不是 PowerShell）
 - 安装依赖：
 
 ```bash
-pacman -S mingw-w64-ucrt-x86_64-gtk4 mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-rust mingw-w64-ucrt-x86_64-ntldd
+pacman -S mingw-w64-x86_64-gtk4 mingw-w64-x86_64-pkgconf mingw-w64-x86_64-gcc mingw-w64-x86_64-rust mingw-w64-x86_64-ntldd mingw-w64-x86_64-libwinpthread
 ```
 
 ### 从源码构建
@@ -51,7 +51,7 @@ cd lingyu
 cargo build --release
 ```
 
-> `build.rs` 会自动将 MSYS2 UCRT64 的 GTK4 DLL 复制到 `target/release/`，构建完成后 `.exe` 开箱即用。
+> `build.rs` 会自动将 MSYS2 MINGW64 的 GTK4 DLL 复制到 `target/release/`，构建完成后 `.exe` 开箱即用。
 
 ### 首次启动
 
@@ -136,7 +136,9 @@ lingyu.exe（正常启动）
 ├── icons/
 │   ├── microphone.svg             # 白色麦克风（空闲）
 │   └── microphone_recording.svg   # 红色方块（录音中）
-├── build.rs             # Windows 自动打包 GTK4 DLL + gdk-pixbuf 加载器
+├── build.rs             # Windows DLL 自动打包（ntldd 递归解析 + gdk-pixbuf 加载器）
+├── .cargo/
+│   └── config.toml      # mingw64 linker + crt-static 配置
 ├── Cargo.toml           # 依赖清单
 └── README.md
 ```
@@ -181,3 +183,7 @@ lingyu.exe --helper
 ## 许可证
 
 MIT License
+
+---
+
+*本软件由 AI 辅助编写。*
