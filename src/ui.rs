@@ -752,8 +752,8 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
         content_area.set_margin_top(16);
         content_area.set_margin_bottom(16);
 
-        let title = gtk4::Label::new(Some("灵语 v1.0.0"));
-        title.set_markup("<b>灵语 v1.0.0</b>");
+        let title = gtk4::Label::new(Some("灵语 v1.0.1"));
+        title.set_markup("<b>灵语 v1.0.1</b>");
         title.set_halign(gtk4::Align::Start);
         content_area.append(&title);
 
