@@ -297,15 +297,24 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
             let status_p = status_s.clone();
             let sample_rate = recorder_s.borrow().sample_rate();
 
-            let (mode_is_api, api_key_s, api_url_s, api_model_s, local_whisper_s) = {
+            let (mode_is_api, api_key_s, api_url_s, api_model_s, local_whisper_s, downloading) = {
                 let rt = runtime_p.borrow();
                 let is_api = matches!(rt.active_service, TranscriptionService::Api);
                 let key = rt.api_key.clone().unwrap_or_default();
                 let url = rt.api_base_url.clone();
                 let mdl = rt.api_model.clone();
                 let local = rt.local_whisper.clone();
-                (is_api, key, url, mdl, local)
+                let dl = rt.downloading;
+                (is_api, key, url, mdl, local, dl)
             };
+
+            // If a model is still downloading, reject the recording.
+            if downloading {
+                show_status(&status_p, "模型下载中，请稍候...");
+                *state_p.borrow_mut() = State::Idle;
+                button_p.remove_css_class("recording");
+                return;
+            }
 
             let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
             std::thread::spawn(move || {
@@ -322,16 +331,18 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
             glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
                 match rx.try_recv() {
                     Ok(Ok(text)) => {
+                        // Save to DB independently of clipboard — transcription history
+                        // should persist even if clipboard is locked by another app.
+                        if let Ok(d) = db_p.lock() {
+                            if let Some(ref d) = *d {
+                                let _ = d.insert(&text);
+                            }
+                        }
                         if let Err(e) = input::copy_to_clipboard(&text) {
                             log_error(&format!("复制到剪贴板失败：{e}"));
                             show_status(&status_p, "错误，看日志");
                         } else {
                             show_status(&status_p, "已复制");
-                            if let Ok(d) = db_p.lock() {
-                                if let Some(ref d) = *d {
-                                    let _ = d.insert(&text);
-                                }
-                            }
                         }
                         let st = status_p.clone();
                         glib::timeout_add_local_once(
@@ -378,11 +389,20 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     let stt_section = gtk4::gio::Menu::new();
 
     let stt_local_section = gtk4::gio::Menu::new();
+    let binary_ready = config::funasr_binary_ready(&config.bin_dir);
     for lm in config::LOCAL_MODEL_PRESETS {
+        // Only show local model options if the FunASR engine is installed.
+        if !binary_ready {
+            continue;
+        }
         stt_local_section.append(
             Some(&format!("{} ({})", lm.label, lm.size_label)),
             Some(&format!("app.transcription-mode::{}", lm.id)),
         );
+    }
+    // If binary not ready, show a hint instead of empty section.
+    if !binary_ready {
+        stt_local_section.append(Some("本地引擎未安装"), None::<&str>);
     }
 
     let settings_section = gtk4::gio::Menu::new();
@@ -396,7 +416,8 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     actions_section.append(Some("退出"), Some("app.quit"));
 
     let menu = gtk4::gio::Menu::new();
-    menu.append_section(Some("语音转文字 — API"), &stt_section);
+    // API mode is configured via environment variables; no menu switch needed.
+    // Only show the local model section.
     menu.append_section(Some("语音转文字 — 本地"), &stt_local_section);
     menu.append_section(Some("设置"), &settings_section);
     menu.append_section(None, &actions_section);
@@ -477,8 +498,10 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                 let status_dl = status_m.clone();
                 let config_dl = Arc::clone(&config_m);
                 let db_dl = Arc::clone(&db_m);
+                let runtime_dl = Rc::clone(&runtime_m);
                 let provider_id = preset.id.to_string();
                 show_status(&status_m, "正在下载模型...");
+                runtime_m.borrow_mut().downloading = true;
 
                 enum DlMsg { Progress(u64, Option<u64>), Done, Error(String) }
                 let (tx, rx) = std::sync::mpsc::channel::<DlMsg>();
@@ -547,18 +570,21 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                                 &model_path,
                                 &config_dl.models_dir,
                             ) {
-                                show_status(&status_dl, "模型准备就绪 ✓");
-                                let st = status_dl.clone();
-                                glib::timeout_add_local_once(
-                                    std::time::Duration::from_secs(2),
-                                    move || hide_status(&st),
-                                );
+                                runtime_dl.borrow_mut().local_whisper = Some(whisper);
                             }
+                            runtime_dl.borrow_mut().downloading = false;
+                            show_status(&status_dl, "模型准备就绪 ✓");
+                            let st = status_dl.clone();
+                            glib::timeout_add_local_once(
+                                std::time::Duration::from_secs(2),
+                                move || hide_status(&st),
+                            );
                             glib::ControlFlow::Break
                         }
                         Some(DlMsg::Error(e)) => {
                             log_error(&format!("模型下载失败：{e}"));
                             show_status(&status_dl, "模型下载失败");
+                            runtime_dl.borrow_mut().downloading = false;
                             let st = status_dl.clone();
                             glib::timeout_add_local_once(
                                 std::time::Duration::from_secs(3),
@@ -849,14 +875,16 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
             unsafe extern "system" fn sub_wnd_proc(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize {
                 if msg == WM_INPUT {
                     let target_vk = RAW_VK.load(Ordering::SeqCst);
+                    // RAWINPUTHEADER: dwType(0..4), cbSize(4..8), hDevice(8..16), wParam(12..16) on x64.
+                    // RAWKEYBOARD starts at offset 16: MakeCode(16), Flags(18), Reserved(20), VKey(22).
                     let mut size: u32 = 64;
                     let mut buf: [u8; 64] = std::mem::zeroed();
                     let ret = GetRawInputData(lparam, RID_INPUT, buf.as_mut_ptr() as *mut _, &mut size, 24);
-                    if ret != 0xFFFFFFFF && size >= 40 {
+                    if ret != 0xFFFFFFFF && size >= 32 {
                         let dw_type = u32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]);
                         if dw_type == RIM_TYPEKEYBOARD {
-                            let vkey = u16::from_ne_bytes([buf[30], buf[31]]);
-                            let flags = u16::from_ne_bytes([buf[26], buf[27]]);
+                            let vkey = u16::from_ne_bytes([buf[22], buf[23]]);
+                            let flags = u16::from_ne_bytes([buf[18], buf[19]]);
                             if vkey as u32 == target_vk {
                                 let pressed = (flags & RI_KEY_BREAK) == 0;
                                 RAW_PRESSED.store(pressed, Ordering::SeqCst);
@@ -915,16 +943,22 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
             *tick2.borrow_mut() += 1;
             let t = *tick2.borrow();
 
-            // Retry helper connection every 500ms (~17 ticks)
-            if helper_reader.is_none() && t % 17 == 1 {
+            // Retry helper connection every 500ms (~17 ticks).
+            // Also re-connect if the existing helper died (stale shared-memory mapping).
+            let need_reconnect = helper_reader.is_none()
+                || !helper_reader.as_ref().is_some_and(|h| h.is_alive());
+            if need_reconnect && t % 17 == 1 {
                 helper_reader = crate::helper::try_connect();
                 if helper_reader.is_some() {
                     crate::log::debug("helper connected on retry");
                 }
             }
 
-            // Read from helper IPC if available, otherwise from GTK subclass
+            // Read from helper IPC if available, otherwise from GTK subclass.
+            // If helper is alive but hasn't updated state in a while (crashed),
+            // fall through to GTK subclass path.
             let helper_down = helper_reader.as_ref()
+                .filter(|h| h.is_alive())
                 .map(|h| h.is_key_pressed())
                 .unwrap_or(false);
             let gtk_down = RAW_PRESSED.load(Ordering::SeqCst);
@@ -968,17 +1002,34 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
 
         show_status(&status_dl, "首次启动：检查依赖...");
         let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
 
         std::thread::spawn(move || {
+            let mut bin_ok = false;
+            let mut vad_ok = false;
             if !bin_path.exists() {
                 tx.send("正在下载 FunASR 引擎...".into()).ok();
-                let _ = download_funasr_binary(&bin_dir).map(|_| tx.send("FunASR 引擎就绪 ✓".into()));
+                match download_funasr_binary(&bin_dir) {
+                    Ok(()) => { bin_ok = true; let _ = tx.send("FunASR 引擎就绪 ✓".into()); }
+                    Err(e) => { let _ = tx.send(format!("FunASR 下载失败：{e}")); }
+                }
+            } else {
+                bin_ok = true;
             }
             if !vad_path.exists() {
                 tx.send("正在下载 VAD 模型...".into()).ok();
-                let _ = download_file(config::VAD_MODEL_URL, &vad_path)
-                    .map(|_| tx.send("所有依赖就绪 ✓".into()));
+                match download_file(config::VAD_MODEL_URL, &vad_path) {
+                    Ok(()) => { vad_ok = true; let _ = tx.send("所有依赖就绪 ✓".into()); }
+                    Err(e) => { let _ = tx.send(format!("VAD 模型下载失败：{e}")); }
+                }
+            } else {
+                vad_ok = true;
             }
+            if !bin_ok && !vad_ok {
+                let _ = tx.send("首次启动依赖下载完成，部分失败".into());
+            }
+            drop(tx);
+            let _ = done_tx.send(());
         });
 
         let status_poll = status_dl.clone();
@@ -986,7 +1037,12 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
             while let Ok(msg) = rx.try_recv() {
                 show_status(&status_poll, &msg);
             }
-            glib::ControlFlow::Continue
+            // Stop polling once the background thread finishes.
+            if done_rx.try_recv().is_ok() {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
         });
     });
 
@@ -1028,15 +1084,23 @@ fn stop_and_transcribe(
     let status_p = status.clone();
     let sample_rate = recorder.borrow().sample_rate();
 
-    let (mode_is_api, api_key_s, api_url_s, api_model_s, local_whisper_s) = {
+    let (mode_is_api, api_key_s, api_url_s, api_model_s, local_whisper_s, downloading) = {
         let rt = runtime_p.borrow();
         let is_api = matches!(rt.active_service, TranscriptionService::Api);
         let key = rt.api_key.clone().unwrap_or_default();
         let url = rt.api_base_url.clone();
         let mdl = rt.api_model.clone();
         let local = rt.local_whisper.clone();
-        (is_api, key, url, mdl, local)
+        let dl = rt.downloading;
+        (is_api, key, url, mdl, local, dl)
     };
+
+    if downloading {
+        show_status(&status_p, "模型下载中，请稍候...");
+        *state_p.borrow_mut() = State::Idle;
+        button_p.remove_css_class("recording");
+        return;
+    }
 
     let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
     std::thread::spawn(move || {
@@ -1053,16 +1117,17 @@ fn stop_and_transcribe(
     glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
         match rx.try_recv() {
             Ok(Ok(text)) => {
+                // Save to DB independently of clipboard.
+                if let Ok(d) = db_p.lock() {
+                    if let Some(ref d) = *d {
+                        let _ = d.insert(&text);
+                    }
+                }
                 if let Err(e) = input::copy_to_clipboard(&text) {
                     log_error(&format!("复制到剪贴板失败：{e}"));
                     show_status(&status_p, "错误，看日志");
                 } else {
                     show_status(&status_p, "已复制");
-                    if let Ok(d) = db_p.lock() {
-                        if let Some(ref d) = *d {
-                            let _ = d.insert(&text);
-                        }
-                    }
                 }
                 let st = status_p.clone();
                 glib::timeout_add_local_once(
@@ -1110,17 +1175,44 @@ fn log_error(msg: &str) {
 // ── Dialogs ──────────────────────────────────────────────────────────────────
 
 fn show_history_dialog(window: &gtk4::ApplicationWindow, db: &Arc<Mutex<Option<Db>>>) {
-    let entries = if let Ok(d) = db.lock() {
-        d.as_ref().and_then(|d| d.recent(50).ok()).unwrap_or_default()
-    } else { vec![] };
+    let (entries, error_msg) = if let Ok(d) = db.lock() {
+        match d.as_ref().map(|d| d.recent(50)) {
+            Some(Ok(entries)) => (entries, None),
+            Some(Err(_)) => (vec![], Some("历史记录加载失败：数据库可能已损坏")),
+            None => (vec![], Some("数据库未就绪，请先完成首次启动")),
+        }
+    } else {
+        (vec![], Some("无法获取数据库锁"))
+    };
 
-    let dialog = gtk4::Dialog::builder()
-        .title("历史记录")
-        .transient_for(window)
-        .modal(true)
-        .default_width(400)
-        .default_height(300)
-        .build();
+    // Show error in dialog title if DB is corrupted.
+    let dialog = if let Some(_msg) = error_msg {
+        gtk4::Dialog::builder()
+            .title(&format!("历史记录 — 错误"))
+            .transient_for(window)
+            .modal(true)
+            .default_width(400)
+            .default_height(200)
+            .build()
+    } else {
+        gtk4::Dialog::builder()
+            .title("历史记录")
+            .transient_for(window)
+            .modal(true)
+            .default_width(400)
+            .default_height(300)
+            .build()
+    };
+
+    // If there was an error, show it and skip the entries list.
+    if error_msg.is_some() {
+        let error_label = gtk4::Label::new(Some(&error_msg.unwrap_or_default()));
+        error_label.set_margin_top(20);
+        dialog.content_area().append(&error_label);
+        dialog.add_button("确定", gtk4::ResponseType::Ok);
+        dialog.present();
+        return;
+    }
 
     let scrolled = gtk4::ScrolledWindow::new();
     let text = gtk4::TextBuffer::new(None);
@@ -1150,8 +1242,31 @@ fn position_window(window: &gtk4::ApplicationWindow, db: &Arc<Mutex<Option<Db>>>
 
     window.set_default_size(88, 100);
 
-    if let Some((_x, _y)) = saved {
-        // Position not restored in gtk4-rs 0.9.x (no move_to on Surface)
+    if let Some((x, y)) = saved {
+        // Restore saved position using Win32 SetWindowPos (gtk4-rs 0.9.x has no move_to).
+        #[cfg(target_os = "windows")]
+        unsafe {
+            use std::ffi::c_void;
+            extern "system" {
+                fn SetWindowPos(
+                    hWnd: *mut c_void, hWndInsertAfter: *mut c_void,
+                    X: i32, Y: i32, cx: i32, cy: i32, uFlags: u32,
+                ) -> i32;
+                fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
+            }
+            let title = window.title().unwrap_or_default();
+            let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+            let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
+            if hwnd != 0 {
+                const SWP_NOSIZE: u32 = 0x0001;
+                SetWindowPos(
+                    hwnd as *mut c_void,
+                    std::ptr::null_mut(),
+                    x, y, 0, 0,
+                    SWP_NOSIZE,
+                );
+            }
+        }
         window.present();
     } else {
         // Bottom-right
@@ -1163,6 +1278,16 @@ fn position_window(window: &gtk4::ApplicationWindow, db: &Arc<Mutex<Option<Db>>>
                 let x = geo.width() - 100;
                 let y = geo.height() - 120;
                 window.set_default_size(88, 100);
+                #[cfg(target_os = "windows")]
+                {
+                    // Save initial position so it persists next launch.
+                    if let Ok(d) = db.lock() {
+                        if let Some(ref d) = *d {
+                            let _ = d.set_setting("window_x", &x.to_string());
+                            let _ = d.set_setting("window_y", &y.to_string());
+                        }
+                    }
+                }
                 window.present();
             } else {
                 window.present();
@@ -1195,12 +1320,24 @@ fn download_funasr_binary(bin_dir: &std::path::Path) -> Result<(), String> {
 
     let cursor = std::io::Cursor::new(&bytes[..]);
 
-    // Zip extraction
+    // Zip extraction — prefer exact match first, then prefix match (handles nested folders).
+    // Reject non-.exe entries (checksum files, README, etc.) to avoid extracting metadata as binary.
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| format!("读取压缩包失败：{e}"))?;
+    // First pass: look for exact or path-prefix match with .exe extension.
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| format!("读取项失败：{e}"))?;
         let name = entry.name().to_string();
-        if name.ends_with(binary_name) || name.contains(binary_name) {
+        if name.ends_with(binary_name) && name.to_lowercase().ends_with(".exe") {
+            let mut out = std::fs::File::create(&dest).map_err(|e| format!("创建文件失败：{e}"))?;
+            std::io::copy(&mut entry, &mut out).map_err(|e| format!("写入文件失败：{e}"))?;
+            return Ok(());
+        }
+    }
+    // Second pass: fallback to substring match but only for .exe files.
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| format!("读取项失败：{e}"))?;
+        let name = entry.name().to_string();
+        if name.contains(binary_name) && name.to_lowercase().ends_with(".exe") {
             let mut out = std::fs::File::create(&dest).map_err(|e| format!("创建文件失败：{e}"))?;
             std::io::copy(&mut entry, &mut out).map_err(|e| format!("写入文件失败：{e}"))?;
             return Ok(());

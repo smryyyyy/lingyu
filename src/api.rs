@@ -20,8 +20,11 @@ pub async fn transcribe(base_url: &str, api_key: &str, model: &str, wav_data: Ve
         .timeout(Duration::from_secs(120)).connect_timeout(Duration::from_secs(10))
         .build().map_err(|e| format!("HTTP 客户端错误：{e}"))?;
 
-    let resp = client.post(&url).bearer_auth(api_key).multipart(form)
-        .send().await.map_err(|e| format!("请求失败：{e}"))?;
+    let resp = if api_key.is_empty() {
+        client.post(&url).multipart(form).send().await.map_err(|e| format!("请求失败：{e}"))?
+    } else {
+        client.post(&url).bearer_auth(api_key).multipart(form).send().await.map_err(|e| format!("请求失败：{e}"))?
+    };
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -55,8 +58,11 @@ pub fn transcribe_blocking(base_url: &str, api_key: &str, model: &str, wav_data:
         .text("response_format", "json")
         .part("file", file_part);
 
-    let resp = client.post(&url).bearer_auth(api_key).multipart(form)
-        .send().map_err(|e| format!("请求失败：{e}"))?;
+    let resp = if api_key.is_empty() {
+        client.post(&url).multipart(form).send().map_err(|e| format!("请求失败：{e}"))?
+    } else {
+        client.post(&url).bearer_auth(api_key).multipart(form).send().map_err(|e| format!("请求失败：{e}"))?
+    };
 
     if !resp.status().is_success() {
         return Err(format!("API 错误 {}：{}", resp.status(), resp.text().unwrap_or_default()));

@@ -30,13 +30,25 @@ impl LocalWhisper {
         }
 
         let temp_dir = std::env::temp_dir();
-        let wav_path = temp_dir.join("lingyu_input.wav");
+        // Use process ID + monotonically increasing counter for uniqueness even under
+        // rapid double-trigger (Windows SystemTime resolution is ~15ms).
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let pid = std::process::id();
+        let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let wav_path = temp_dir.join(format!("lingyu_{pid}_{counter}.wav"));
         std::fs::write(&wav_path, wav_data).map_err(|e| format!("写入临时文件失败：{e}"))?;
 
         let mut cmd = Command::new(&self.binary_path);
         cmd.arg("-m").arg(&self.model_path).arg("-a").arg(&wav_path);
-        // Q8 model outputs clean text; F16 needs --keep-tags otherwise stdout is empty
-        if self.model_path.contains("f16") {
+        // Q8 model outputs clean text; F16 needs --keep-tags otherwise stdout is empty.
+        // Match on filename stem (not full path) to avoid false positives from directory names.
+        let is_f16 = Path::new(&self.model_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_lowercase().ends_with("f16"))
+            .unwrap_or(false);
+        if is_f16 {
             cmd.arg("--keep-tags");
         }
         if let Some(ref vad) = self.vad_path { cmd.arg("--vad").arg(vad); }
@@ -49,7 +61,13 @@ impl LocalWhisper {
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
 
-        let output = cmd.output().map_err(|e| format!("启动 FunASR 失败：{e}"))?;
+        let output = match cmd.output() {
+            Ok(o) => o,
+            Err(e) => {
+                let _ = std::fs::remove_file(&wav_path);
+                return Err(format!("启动 FunASR 失败：{e}"));
+            }
+        };
         let _ = std::fs::remove_file(&wav_path);
 
         if !output.status.success() {

@@ -47,10 +47,12 @@ impl Db {
         if !VALID_SETTING_PREFIXES.iter().any(|p| key == *p || key.starts_with(p)) {
             return Err(rusqlite::Error::InvalidParameterName(format!("未知键：{key}")));
         }
+        // Truncate to 4096 bytes on a char boundary to avoid splitting UTF-8.
+        let truncated: String = value.chars().take(4096).collect();
         self.conn.execute(
             "INSERT INTO settings (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![key, &value[..value.len().min(4096)]],
+            params![key, &truncated],
         )?;
         Ok(())
     }
@@ -62,6 +64,6 @@ impl Db {
         let rows = stmt.query_map(params![limit as i64], |row| Ok(Transcription {
             _id: row.get(0)?, text: row.get(1)?, created_at: row.get(2)?,
         }))?;
-        rows.collect()
+        rows.collect::<Result<Vec<_>, _>>()
     }
 }

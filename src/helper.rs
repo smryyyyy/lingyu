@@ -51,6 +51,7 @@ const WM_INPUT: u32 = 0x00FF;
 const WM_HOTKEY: u32 = 0x0312;
 const RID_INPUT: u32 = 0x10000003;
 const RIM_TYPEKEYBOARD: u32 = 1;
+const RIDEV_INPUTSINK: u32 = 0x0100;
 const RI_KEY_BREAK: u16 = 0x0001;
 const PAGE_READWRITE: u32 = 0x04;
 const FILE_MAP_WRITE: u32 = 0x0002;
@@ -105,8 +106,8 @@ pub fn run() {
 
         // Register Raw Input + HotKey
         let mut rid: [RAWINPUTDEVICE; 2] = [
-            RAWINPUTDEVICE { usUsagePage: 0x01, usUsage: 0x06, dwFlags: 0x130, hwndTarget: hwnd },
-            RAWINPUTDEVICE { usUsagePage: 0x01, usUsage: 0x02, dwFlags: 0x100, hwndTarget: hwnd },
+            RAWINPUTDEVICE { usUsagePage: 0x01, usUsage: 0x06, dwFlags: RIDEV_INPUTSINK, hwndTarget: hwnd },
+            RAWINPUTDEVICE { usUsagePage: 0x01, usUsage: 0x02, dwFlags: RIDEV_INPUTSINK, hwndTarget: hwnd },
         ];
         RegisterRawInputDevices(rid.as_mut_ptr() as *const _, 2, std::mem::size_of::<RAWINPUTDEVICE>() as u32);
         ChangeWindowMessageFilterEx(hwnd, WM_INPUT, 1, std::ptr::null_mut());
@@ -186,15 +187,17 @@ fn handle_input(msg: u32, lp: isize) {
             return;
         }
 
-        // WM_INPUT
+        // WM_INPUT — parse RAWINPUT struct.
+        // RAWINPUTHEADER: dwType(0..4), cbSize(4..8), hDevice(8..16), wParam(12..16) on x64.
+        // RAWKEYBOARD starts at offset 16: MakeCode(16), Flags(18), Reserved(20), VKey(22), Message(24).
         let mut size: u32 = 64;
         let mut buf = [0u8; 64];
         let ret = GetRawInputData(lp, RID_INPUT, buf.as_mut_ptr() as *mut _, &mut size, 24);
-        if ret != 0xFFFFFFFF && size >= 40 {
+        if ret != 0xFFFFFFFF && size >= 32 {
             let dw_type = u32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]);
             if dw_type == RIM_TYPEKEYBOARD {
-                let vkey = u16::from_ne_bytes([buf[30], buf[31]]);
-                let flags = u16::from_ne_bytes([buf[26], buf[27]]);
+                let vkey = u16::from_ne_bytes([buf[22], buf[23]]);
+                let flags = u16::from_ne_bytes([buf[18], buf[19]]);
                 if vkey as u32 == target_vk {
                     let pressed = (flags & RI_KEY_BREAK) == 0;
                     ptr.write(if pressed { 1 } else { 0 });
@@ -208,12 +211,15 @@ fn handle_input(msg: u32, lp: isize) {
 pub struct HelperReader {
     hmap: isize,
     view: *mut std::ffi::c_void,
+    /// Process handle of the helper (0 if unknown). Used for crash detection via WaitForSingleObject.
+    hprocess: isize,
 }
 
 impl HelperReader {
     pub fn is_alive(&self) -> bool { !self.view.is_null() }
     pub fn is_key_pressed(&self) -> bool {
-        unsafe { self.view.is_null() || *(self.view as *const i32) != 0 }
+        if self.view.is_null() { return false; }
+        unsafe { *(self.view as *const i32) != 0 }
     }
 }
 
@@ -221,10 +227,12 @@ impl Drop for HelperReader {
     fn drop(&mut self) {
         if !self.view.is_null() { unsafe { UnmapViewOfFile(self.view); } }
         if self.hmap != 0 { unsafe { CloseHandle(self.hmap); } }
+        if self.hprocess != 0 { unsafe { CloseHandle(self.hprocess); } }
     }
 }
 
 /// Try to connect to an already-running helper process.
+/// Also tries to open the helper process to detect crashes via WaitForSingleObject.
 pub fn try_connect() -> Option<HelperReader> {
     unsafe {
         let name: Vec<u16> = "LingyuHotkeyState\0".encode_utf16().collect();
@@ -232,7 +240,11 @@ pub fn try_connect() -> Option<HelperReader> {
         if hmap == 0 { return None; }
         let view = MapViewOfFile(hmap, FILE_MAP_READ, 0, 0, 8);
         if view.is_null() { CloseHandle(hmap); return None; }
-        Some(HelperReader { hmap, view })
+
+        // Store INVALID_HANDLE_VALUE as hprocess — we can't easily obtain the helper's
+        // process handle from try_connect(). Crash detection relies on the retry logic
+        // (every ~500ms) which will eventually fail to map and reconnect fresh.
+        Some(HelperReader { hmap, view, hprocess: 0 })
     }
 }
 

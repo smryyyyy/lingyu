@@ -34,8 +34,8 @@ fn main() {
         // Even if launch fails, we proceed with GTK subclass fallback
     }
 
-    // Create tokio runtime for reqwest async + spawn_blocking
-    let _tokio_rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    // reqwest::blocking uses its own internal thread pool; no tokio runtime needed.
+    // (The async api::transcribe() exists but is unused — all call sites use transcribe_blocking.)
     let config = Arc::new(config::Config::load());
 
     let app = gtk4::Application::builder()

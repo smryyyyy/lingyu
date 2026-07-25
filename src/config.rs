@@ -42,8 +42,22 @@ impl Config {
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
             .unwrap_or(true);
 
-        let record_shortcut = std::env::var("RECORD_SHORTCUT")
-            .unwrap_or_else(|_| "F10".into());
+        // Shortcut source priority: shortcut.txt (user-set via UI) > env var > default.
+        // This ensures the env var acts as a true fallback when no file exists.
+        let mut record_shortcut: Option<String> = std::env::var("RECORD_SHORTCUT").ok();
+        // Try to read from shortcut.txt if it exists (written by UI shortcut dialog).
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(parent) = exe_path.parent() {
+                let shortcut_file = parent.join("shortcut.txt");
+                if let Ok(contents) = std::fs::read_to_string(&shortcut_file) {
+                    let trimmed = contents.trim();
+                    if matches!(trimmed, "F1" | "F2" | "F3" | "F4" | "F5" | "F6" | "F7" | "F8" | "F9" | "F10" | "F11" | "F12") {
+                        record_shortcut = Some(trimmed.to_string());
+                    }
+                }
+            }
+        }
+        let record_shortcut = record_shortcut.unwrap_or_else(|| "F10".into());
 
         Self { api_base_url, api_key, api_model, db_path, bin_dir, models_dir, always_on_top, record_shortcut }
     }

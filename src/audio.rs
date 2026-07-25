@@ -60,7 +60,7 @@ impl Recorder {
             }
             fmt => return Err(format!("不支持的格式：{fmt:?}")),
         };
-        stream.play().map_err(|e| format!("播放失败：{e}"))?;
+        stream.play().map_err(|e| format!("启动录音流失败：{e}"))?;
         self.stream = Some(stream);
         Ok(())
     }
