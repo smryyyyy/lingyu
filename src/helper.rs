@@ -188,16 +188,18 @@ fn handle_input(msg: u32, lp: isize) {
         }
 
         // WM_INPUT — parse RAWINPUT struct.
-        // RAWINPUTHEADER: dwType(0..4), cbSize(4..8), hDevice(8..16), wParam(12..16) on x64.
-        // RAWKEYBOARD starts at offset 16: MakeCode(16), Flags(18), Reserved(20), VKey(22), Message(24).
+        // RAWINPUTHEADER on x64 (24 bytes):
+        //   dwType(0..4), dwSize(4..8), hDevice(8..16=HANDLE), wParam(16..24=WPARAM)
+        // RAWKEYBOARD follows at offset 24:
+        //   MakeCode(24..26), Flags(26..28), Reserved(28..30), VKey(30..32), Message(32..36)
         let mut size: u32 = 64;
         let mut buf = [0u8; 64];
         let ret = GetRawInputData(lp, RID_INPUT, buf.as_mut_ptr() as *mut _, &mut size, 24);
-        if ret != 0xFFFFFFFF && size >= 32 {
+        if ret != 0xFFFFFFFF && size >= 36 {
             let dw_type = u32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]);
             if dw_type == RIM_TYPEKEYBOARD {
-                let vkey = u16::from_ne_bytes([buf[22], buf[23]]);
-                let flags = u16::from_ne_bytes([buf[18], buf[19]]);
+                let vkey = u16::from_ne_bytes([buf[30], buf[31]]);
+                let flags = u16::from_ne_bytes([buf[26], buf[27]]);
                 if vkey as u32 == target_vk {
                     let pressed = (flags & RI_KEY_BREAK) == 0;
                     ptr.write(if pressed { 1 } else { 0 });

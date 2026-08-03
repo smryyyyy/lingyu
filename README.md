@@ -1,4 +1,4 @@
-<h1 align="center">灵语（LingYu）v1.0.1</h1>
+<h1 align="center">灵语（LingYu）v1.0.2</h1>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Rust-1.85+-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust">
@@ -47,6 +47,7 @@
 - 优化：ZIP 解压严格校验 .exe 后缀，防止提取校验和文件
 - 优化：窗口位置首次启动自动保存到数据库
 - 优化：UTF-8 字符串截断按字符边界进行，避免无效编码
+- 修复：v1.0.1 全局热键偏移修复方向错误（松开快捷键不自动停止录音）
 
 ---
 
